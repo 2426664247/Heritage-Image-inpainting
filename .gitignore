@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
+
+# Project outputs and caches
+FirstSoloProject/outputs/
+
+# Local datasets and masks
+FirstSoloProject/train_data/
+FirstSoloProject/imgs/
+FirstSoloProject/masks/
+FirstSoloProject/masks_inverted/
+
+# Model weights and large artifacts
+FirstSoloProject/weights/
+
+# HuggingFace cache (if ever checked into project dir)
+**/huggingface/**
