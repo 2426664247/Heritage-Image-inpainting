@@ -87,13 +87,13 @@ def main():
     parser.add_argument("--guidance", type=float, default=5.0)
     parser.add_argument("--output", type=str, default="outputs/result.png")
     parser.add_argument("--lora", type=str, default=None)
-    parser.add_argument("--unet_weights", type=str, default=None)
+    parser.add_argument("--unet_weights", type=str, default="weights/unet_partial_tuned.safetensors")
     parser.add_argument("--size", type=int, default=512)
-    parser.add_argument("--model", type=str, default="runwayml/stable-diffusion-inpainting")
-    parser.add_argument("--mask_mode", type=str, default="black")
-    parser.add_argument("--batch_imgs_dir", type=str, default=None)
-    parser.add_argument("--batch_masks_dir", type=str, default=None)
-    parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--model", type=str, default="stabilityai/stable-diffusion-2-inpainting")
+    parser.add_argument("--mask_mode", type=str, default="white")
+    parser.add_argument("--batch_imgs_dir", type=str, default="imgs")
+    parser.add_argument("--batch_masks_dir", type=str, default="masks")
+    parser.add_argument("--output_dir", type=str, default="outputs/batch")
     parser.add_argument("--collage_spacing_h", type=int, default=20)
     parser.add_argument("--collage_spacing_v", type=int, default=20)
     parser.add_argument("--rows", type=int, default=4)
@@ -168,16 +168,16 @@ def main():
                         m[stem] = os.path.join(root, f)
         return m
 
-    if args.batch_imgs_dir and args.batch_masks_dir:
+    if args.image and args.mask:
+        run_single(args.image, args.mask, args.output)
+    else:
         os.makedirs(args.output_dir or "outputs/batch", exist_ok=True)
-        imgs = build_file_map(args.batch_imgs_dir)
-        masks = build_file_map(args.batch_masks_dir)
+        imgs = build_file_map(args.batch_imgs_dir or "imgs")
+        masks = build_file_map(args.batch_masks_dir or "masks")
         matched = sorted(set(imgs.keys()) & set(masks.keys()))
         for stem in matched:
             out_path = os.path.join(args.output_dir or "outputs/batch", f"{stem}_collage.png")
             run_single(imgs[stem], masks[stem], out_path)
-    else:
-        run_single(args.image, args.mask, args.output)
 
 if __name__ == "__main__":
     main()

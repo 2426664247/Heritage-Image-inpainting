@@ -1,5 +1,5 @@
 # 文物图像修复项目（扩散模型 Inpainting + 可视化对比网格）
-版本：v0.1.2
+版本：v0.1.4
 
 ## 环境准备
 
@@ -39,14 +39,23 @@
 
 ## 使用示例
 
-- 单张推理（掩码黑=修补）
-  - `python scripts/infer_inpaint.py --image F:\TraeSoloProject\imgs\pic.png --mask F:\TraeSoloProject\masks\pic.png --output outputs/pic_grid.png --steps 30 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode black --rows 4 --collage_spacing_h 20 --collage_spacing_v 20 --seed 1234`
+- 单张（最简用法，掩码白=修补）
+  - `python scripts/infer_inpaint.py --image F:\TraeSoloProject\imgs\pic.png --mask F:\TraeSoloProject\masks\pic.png`
 
-- 单张推理（掩码白=修补）
-  - `python scripts/infer_inpaint.py --image F:\TraeSoloProject\imgs\pic.png --mask F:\TraeSoloProject\masks_inverted\pic.png --output outputs/pic_grid.png --steps 30 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 4 --collage_spacing_h 20 --collage_spacing_v 20 --seed 1234`
+- 批量（最简用法，显式传目录）
+  - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks --output_dir outputs\batch`
 
-- 批量推理（掩码黑=修补，按文件名匹配）
-  - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks --output_dir outputs/batch_grid --steps 30 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode black --rows 4 --collage_spacing_h 20 --collage_spacing_v 20 --seed 1234`
+可选参数（按需添加）：
+- 文本提示：`--prompt "修补佛像面部，保持原壁画风格与色彩"`（默认空）
+- 采样步数：`--steps 30~50`（默认 40）
+- 文本引导：`--guidance 4.5~6.5`（默认 5.0）
+- 分辨率：`--size 512/768`（默认 512）
+- 掩码语义：`--mask_mode white/black`（默认 white，白=修补）
+- 行数与间距：`--rows 4 --collage_spacing_h 20 --collage_spacing_v 20`
+- 输出路径（单张）：`--output outputs\result.png`
+- 批量输出目录：`--output_dir outputs\batch`
+- 加载 UNet 权重：`--unet_weights weights\unet_partial_tuned.safetensors`
+- 加载 LoRA 权重：`--lora weights\lora_unet.safetensors`
 
 ## 参数详解（完整）
 
@@ -109,28 +118,25 @@
      - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks_inverted --output_dir outputs/batch_grid --steps 30 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 4 --collage_spacing_h 20 --collage_spacing_v 20 --seed 1234`
 3. 若需要进一步贴合文物风格，执行轻量 LoRA 微调，再在推理命令中加入 `--lora` 参数对比前后
 
-## 两套尺寸策略（避免失真 vs 尺寸一致）
+## 尺寸适配与重采样（与代码一致）
 
-### 方案一（推荐）：输入格式化图，保持原图尺寸，不裁切、不拉伸、不填充
+- 当前脚本会将输入图与掩码统一到“宽高为 8 的倍数”的尺寸送入 inpainting 管线，然后将输出回缩到原图尺寸（高质量插值）。
+- 这能保证生成过程稳定，同时最终保存的三图拼接以原图尺寸为基准；但在高频纹理上可能产生轻微插值失真。若要减少失真，建议适度降低 `--size` 或 `--steps` 并观察对比。
+## 当前脚本默认参数（与代码一致）
 
-- 适用：你能提供“规范化尺寸”的图片（宽高为 8 的倍数，且期望输出也用这个尺寸）
-- 原理：不缩放有效区域，只在管线内部按原图尺寸送入（若需要仅右/下填充到 8 的倍数），生成后严格裁回原图大小
-- 命令（无提示词）：
-  - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks --output_dir outputs/batch_result_only --steps 50 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 1 --seed 2025 --cache_dir F:\TraeSoloProject\models_cache --unet_weights weights\unet_partial_tuned.safetensors --erode_pixels 1 --pad_only 1 --result_only 1`
-- 提示词建议：
-  - 无提示词对比效果、更稳
-  - 若需引导：`--prompt "修补佛像面部，保持原壁画风格与色彩，纹理自然，五官清晰，边缘平滑过渡"`；`guidance=4.5–6.5`
-
-### 方案二（备选）：输入不规范图，先下采样再上采样，内容尺寸一致但可能轻微失真
-
-- 适用：宽高不是 8 的倍数、或尺寸与模型栅格不一致的图片
-- 原理：按比例下采样到管线可接受的尺寸（如靠近 512/768 的 8 倍数），生成后再高质量上采样回原始尺寸；内容尺寸一致，但高频细节可能轻微模糊
-- 命令（无提示词）：
-  - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks --output_dir outputs/batch_resample --steps 50 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 1 --seed 2025 --cache_dir F:\TraeSoloProject\models_cache --unet_weights weights\unet_partial_tuned.safetensors --erode_pixels 1 --pad_only 0 --result_only 1`
-- 提示词建议：
-  - 可用同上提示词；若背景受影响，降低 `guidance` 到 `4.5–5.0`
-
-说明：不建议使用“黑边填充或拉伸”来适配尺寸；上述两种方案分别通过“只填充右/下并裁回”（无拉伸）或“下采样/上采样”（无黑边）来控制尺寸与视觉质量。
+- 模型：`--model stabilityai/stable-diffusion-2-inpainting`
+- 分辨率：`--size 512`
+- 采样步数：`--steps 40`
+- 文本引导：`--guidance 5.0`
+- 输出路径（单张）：`--output outputs/result.png`
+- 文本提示：`--prompt ""`
+- LoRA 权重：`--lora None`
+- UNet 权重：`--unet_weights weights/unet_partial_tuned.safetensors`
+- 掩码语义：`--mask_mode white`（白=修补）
+- 批量目录：`--batch_imgs_dir`、`--batch_masks_dir` 默认未设置（需显式传入）；未设置时不会自动跑批量
+- 批量输出目录：`--output_dir outputs/batch`
+- 行数与间距：`--rows 4`，`--collage_spacing_h 20`，`--collage_spacing_v 20`
+- 随机种子：`--seed 0`（为 0 时每行随机）
 ## 模型原理与实现细节
 
 - 核心思想：扩散模型的“条件去噪”
