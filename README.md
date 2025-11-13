@@ -108,6 +108,29 @@
    - 白=修补：
      - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks_inverted --output_dir outputs/batch_grid --steps 30 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 4 --collage_spacing_h 20 --collage_spacing_v 20 --seed 1234`
 3. 若需要进一步贴合文物风格，执行轻量 LoRA 微调，再在推理命令中加入 `--lora` 参数对比前后
+
+## 两套尺寸策略（避免失真 vs 尺寸一致）
+
+### 方案一（推荐）：输入格式化图，保持原图尺寸，不裁切、不拉伸、不填充
+
+- 适用：你能提供“规范化尺寸”的图片（宽高为 8 的倍数，且期望输出也用这个尺寸）
+- 原理：不缩放有效区域，只在管线内部按原图尺寸送入（若需要仅右/下填充到 8 的倍数），生成后严格裁回原图大小
+- 命令（无提示词）：
+  - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks --output_dir outputs/batch_result_only --steps 50 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 1 --seed 2025 --cache_dir F:\TraeSoloProject\models_cache --unet_weights weights\unet_partial_tuned.safetensors --erode_pixels 1 --pad_only 1 --result_only 1`
+- 提示词建议：
+  - 无提示词对比效果、更稳
+  - 若需引导：`--prompt "修补佛像面部，保持原壁画风格与色彩，纹理自然，五官清晰，边缘平滑过渡"`；`guidance=4.5–6.5`
+
+### 方案二（备选）：输入不规范图，先下采样再上采样，内容尺寸一致但可能轻微失真
+
+- 适用：宽高不是 8 的倍数、或尺寸与模型栅格不一致的图片
+- 原理：按比例下采样到管线可接受的尺寸（如靠近 512/768 的 8 倍数），生成后再高质量上采样回原始尺寸；内容尺寸一致，但高频细节可能轻微模糊
+- 命令（无提示词）：
+  - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks --output_dir outputs/batch_resample --steps 50 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 1 --seed 2025 --cache_dir F:\TraeSoloProject\models_cache --unet_weights weights\unet_partial_tuned.safetensors --erode_pixels 1 --pad_only 0 --result_only 1`
+- 提示词建议：
+  - 可用同上提示词；若背景受影响，降低 `guidance` 到 `4.5–5.0`
+
+说明：不建议使用“黑边填充或拉伸”来适配尺寸；上述两种方案分别通过“只填充右/下并裁回”（无拉伸）或“下采样/上采样”（无黑边）来控制尺寸与视觉质量。
 ## 模型原理与实现细节
 
 - 核心思想：扩散模型的“条件去噪”
@@ -149,4 +172,3 @@
 - v0.1.2
   - 新增“模型原理与实现细节”章节，说明 inpainting 条件扩散、尺寸与掩码处理、训练目标与流程、调参策略等。
   - 保持脚本与用法不变；推理支持提示词与批量生成网格对比。
-
