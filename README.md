@@ -1,5 +1,5 @@
 # 文物图像修复项目（扩散模型 Inpainting + 可视化对比网格）
-版本：v0.1.1
+版本：v0.1.2
 
 ## 环境准备
 
@@ -108,4 +108,45 @@
    - 白=修补：
      - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks_inverted --output_dir outputs/batch_grid --steps 30 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 4 --collage_spacing_h 20 --collage_spacing_v 20 --seed 1234`
 3. 若需要进一步贴合文物风格，执行轻量 LoRA 微调，再在推理命令中加入 `--lora` 参数对比前后
+## 模型原理与实现细节
+
+- 核心思想：扩散模型的“条件去噪”
+  - 使用 `StableDiffusionInpaintPipeline`（SD2-inpainting）。输入包含：原图 `image` 与掩码 `mask_image`。
+  - 掩码白=修补区域（pipeline 内部约定）。未被掩盖的区域保持不变；被掩盖的区域通过条件扩散生成匹配上下文的内容。
+
+- 条件构成：文本提示 + 图像/掩码条件
+  - 文本提示：通过 CLIP 文本编码器提供风格与内容引导，强度由 `guidance_scale` 控制（典型 4–7）。
+  - 图像与掩码：掩码白色像素处会被修补，模型在扩散过程中仅对该区域进行生成，确保背景一致。
+
+- 解析与尺寸处理：
+  - 为匹配 UNet 的卷积栅格，脚本将原图与掩码缩放到“宽、高均为 8 的倍数”输送给模型，生成后再缩回原图尺寸，避免白边与形变。
+  - 可视化拼接：横排三图（原图、原图+掩码涂白、修复结果），竖向堆叠多行（不同随机种子），便于快速对比。
+
+- 训练逻辑（轻量域适配）：
+  - 目标：让 SD2-inpainting 更贴近文物壁画的色彩与纹理分布，提升修补区域的材质一致性与细节。
+  - 数据：从 `imgs/` 与 `masks/`（或 `masks_inverted/`）读取配对；随机增强（水平翻转等）提升鲁棒性。
+  - 过程：
+    1. 原图与掩码缩放到统一训练尺寸（推荐 512/384/256 视显存而定）
+    2. 通过 VAE 将图像与“掩盖后的图像”编码为潜空间 `latents` 与 `masked_latents`
+    3. 采样时间步 `t` 并加噪得到 `noisy_latents`
+    4. UNet 条件去噪：输入为 `[noisy_latents, mask, masked_latents]` 的拼接，输出预测噪声；用 MSE(loss) 与真实噪声对齐
+    5. 仅训练“注意力投影层”（partial UNet）或 LoRA（低秩适配），减少显存占用与优化器状态体积
+  - 保存：训练完成保存为 `weights\unet_partial_tuned.safetensors`（部分层）或 `weights\lora_unet.safetensors`（LoRA）。推理时直接加载，无需重新训练。
+
+- 为何不建议在 8GB 显存下进行 UNet 全量训练：
+  - SD2-inpainting 的 UNet 权重体积很大；全量训练时，优化器状态（动量与二阶矩）会显著增加显存，易 OOM。
+  - 解决路径：使用“部分层训练”或 LoRA；降低训练分辨率、增大梯度累积（`accum`）、降低学习率，稳定训练。
+
+- 提示词的作用与调参：
+  - 提示词可在修补区域引导生成方向；`guidance_scale` 越高，越“听提示词”。过高可能带来过修或风格漂移。
+  - 经验：`guidance=4.5–6.5`；先无提示词对比，再加提示词（例如“修补佛像面部，保持原壁画风格与色彩，纹理自然，五官清晰，边缘平滑过渡”）。
+
+- 缓存与磁盘策略：
+  - 使用 `--cache_dir` 指向 F 盘目录，或设置 `HF_HOME/HUGGINGFACE_HUB_CACHE/TRANSFORMERS_CACHE` 到 F 盘，避免占用 C 盘空间。
+
+## 版本说明
+
+- v0.1.2
+  - 新增“模型原理与实现细节”章节，说明 inpainting 条件扩散、尺寸与掩码处理、训练目标与流程、调参策略等。
+  - 保持脚本与用法不变；推理支持提示词与批量生成网格对比。
 
