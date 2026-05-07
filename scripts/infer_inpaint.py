@@ -1,11 +1,24 @@
 # 导入所需的库
 import argparse  # 用于解析命令行参数
-import subprocess
-import sys
 import os  # 用于与操作系统交互，如文件路径操作
 from PIL import Image, ImageOps  # Pillow库，用于图像处理
 import torch  # PyTorch库，用于深度学习张量操作
 from diffusers import StableDiffusionInpaintPipeline  # Hugging Face的diffusers库，用于稳定扩散修复模型
+
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_MODEL = os.path.join(
+    PROJECT_DIR,
+    "model",
+    "models--stabilityai--stable-diffusion-2-inpainting",
+    "snapshots",
+    "81a84f49b15956b60b4272a405ad3daef3da4590",
+)
+DEFAULT_IMGS_DIR = os.path.join(PROJECT_DIR, "imgs")
+DEFAULT_MASKS_DIR = os.path.join(PROJECT_DIR, "masks")
+DEFAULT_MASKS_INVERTED_DIR = os.path.join(PROJECT_DIR, "masks_inverted")
+DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_DIR, "outputs", "batch")
+DEFAULT_OUTPUT = os.path.join(PROJECT_DIR, "outputs", "result.png")
+DEFAULT_UNET_WEIGHTS = os.path.join(PROJECT_DIR, "weights", "unet_partial_tuned.safetensors")
 
 # 函数：中心裁剪并缩放图像
 def center_crop_resize(img, size):
@@ -30,6 +43,35 @@ def binarize_mask(mask):
     # 将灰度值大于等于128的像素设为255（白），否则为0（黑）
     mask = mask.point(lambda p: 255 if p >= 128 else 0)
     return mask
+
+def is_image_file(name):
+    return name.lower().endswith((".png", ".jpg", ".jpeg"))
+
+def ensure_parent_dir(path):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+def generate_inverted_masks(src_dir, dst_dir):
+    os.makedirs(dst_dir, exist_ok=True)
+    total = 0
+    generated = 0
+    if not os.path.isdir(src_dir):
+        print(f"Mask source directory not found: {src_dir}")
+        return
+    for root, _, files in os.walk(src_dir):
+        for filename in files:
+            if not is_image_file(filename):
+                continue
+            total += 1
+            src_path = os.path.join(root, filename)
+            relpath = os.path.relpath(src_path, src_dir)
+            dst_path = os.path.join(dst_dir, relpath)
+            mask = binarize_mask(Image.open(src_path))
+            ensure_parent_dir(dst_path)
+            ImageOps.invert(mask).save(dst_path)
+            generated += 1
+    print(f"Generated inverted masks: {generated}/{total} -> {dst_dir}")
 
 # 函数：在图像上叠加掩码以供可视化
 def overlay_mask_on_image(img, mask_bw, white_on_black=True):
@@ -91,6 +133,14 @@ def round_to_multiple(x, m=8):
     """
     return max(m, int(round(x / m)) * m)
 
+def fit_to_size(w, h, max_size):
+    if not max_size or max_size <= 0:
+        return round_to_multiple(w, 8), round_to_multiple(h, 8)
+    scale = min(1.0, max_size / max(w, h))
+    tw = round_to_multiple(w * scale, 8)
+    th = round_to_multiple(h * scale, 8)
+    return tw, th
+
 # 函数：信箱模式缩放（保持宽高比）
 def letterbox(img, size, fill):
     """
@@ -124,38 +174,34 @@ def main():
     # --- 1. 解析命令行参数 ---
     parser = argparse.ArgumentParser(description="使用Stable Diffusion进行图像修复")
     # 输入/输出参数
-    parser.add_argument("--image", type=str, required=False, help="单张输入图像的路径")
-    parser.add_argument("--mask", type=str, required=False, help="单张输入掩码的路径")
-    parser.add_argument("--output", type=str, default="outputs/result.png", help="单张图像修复结果的保存路径")
-    parser.add_argument("--batch_imgs_dir", type=str, default="imgs", help="批量处理的图像文件夹路径")
-    parser.add_argument("--batch_masks_dir", type=str, default="masks", help="批量处理的掩码文件夹路径")
-    parser.add_argument("--output_dir", type=str, default="outputs/batch", help="批量处理结果的输出文件夹")
+    parser.add_argument("--image", type=str, default=None, required=False, help="单张输入图像的路径")
+    parser.add_argument("--mask", type=str, default=None, required=False, help="单张输入掩码的路径")
+    parser.add_argument("--output", type=str, default=DEFAULT_OUTPUT, help="单张图像修复结果的保存路径")
+    parser.add_argument("--batch_imgs_dir", type=str, default=DEFAULT_IMGS_DIR, help="批量处理的图像文件夹路径")
+    parser.add_argument("--batch_masks_dir", type=str, default=DEFAULT_MASKS_INVERTED_DIR, help="批量处理的掩码文件夹路径")
+    parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR, help="批量处理结果的输出文件夹")
     
     # 模型与权重参数
-    parser.add_argument("--model", type=str, default="F:\\TraeSoloProject\\.hfhub\\models--stabilityai--stable-diffusion-2-inpainting\\snapshots\\81a84f49b15956b60b4272a405ad3daef3da4590", help="基础修复模型的Hugging Face路径或本地路径")
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="基础修复模型的Hugging Face路径或本地路径")
     parser.add_argument("--lora", type=str, default=None, help="可选的LoRA权重路径")
-    parser.add_argument("--unet_weights", type=str, default="weights/unet_partial_tuned.safetensors", help="可选的UNet权重路径 (safetensors格式)")
+    parser.add_argument("--unet_weights", type=str, default=DEFAULT_UNET_WEIGHTS, help="可选的UNet权重路径 (safetensors格式)")
 
     # 修复过程参数
     parser.add_argument("--prompt", type=str, default="", help="指导修复的文本提示")
-    parser.add_argument("--steps", type=int, default=40, help="扩散过程的步数")
+    parser.add_argument("--steps", type=int, default=30, help="扩散过程的步数")
     parser.add_argument("--guidance", type=float, default=5.0, help="引导系数，控制提示与图像的符合程度")
     parser.add_argument("--size", type=int, default=512, help="模型处理时内部使用的尺寸（此脚本中已弃用，改为动态计算）")
-    parser.add_argument("--mask_mode", type=str, default="white", choices=['white', 'black'], help="掩码模式：'white'表示白色区域是修复区，'black'表示黑色区域是修复区")
-    parser.add_argument("--seed", type=int, default=0, help="随机种子，用于复现结果。设为0则使用随机种子")
+    parser.add_argument("--mask_mode", type=str, default="black", choices=['white', 'black'], help="掩码模式：'white'表示白色区域是修复区，'black'表示黑色区域是修复区")
+    parser.add_argument("--seed", type=int, default=1234, help="随机种子，用于复现结果。设为0则使用随机种子")
 
     # 结果拼贴图参数
-    parser.add_argument("--rows", type=int, default=4, help="为每张输入图生成多少行不同的修复结果")
+    parser.add_argument("--rows", type=int, default=1, help="为每张输入图生成多少行不同的修复结果")
     parser.add_argument("--collage_spacing_h", type=int, default=20, help="拼贴图中图像的水平间距")
     parser.add_argument("--collage_spacing_v", type=int, default=20, help="拼贴图中图像的垂直间距")
     
     args = parser.parse_args()
 
-    masks_dir = args.batch_masks_dir or "masks"
-    masks_inv_dir = "masks_inverted"
-    sync_script = os.path.join(os.path.dirname(__file__), "sync_masks.py")
-    if os.path.isfile(sync_script):
-        subprocess.run([sys.executable, sync_script, "--masks", masks_dir, "--masks_inverted", masks_inv_dir], check=False)
+    generate_inverted_masks(DEFAULT_MASKS_DIR, DEFAULT_MASKS_INVERTED_DIR)
 
     # --- 2. 初始化模型 ---
     device = "cuda" if torch.cuda.is_available() else "cpu"  # 检查是否有可用的GPU
@@ -201,7 +247,7 @@ def main():
 
         # 关键步骤：将图像和掩码尺寸调整为8的倍数，避免拉伸失真
         w, h = img_orig.size
-        tw, th = round_to_multiple(w, 8), round_to_multiple(h, 8)
+        tw, th = fit_to_size(w, h, args.size)
         img_pipe = img_orig.resize((tw, th), Image.LANCZOS)
         mask_pipe = mask_for_pipe.resize((tw, th), Image.NEAREST)
 

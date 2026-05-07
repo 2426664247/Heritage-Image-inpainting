@@ -11,21 +11,43 @@
 - 安装依赖
   - `pip install -U diffusers transformers accelerate safetensors peft opencv-python pillow numpy`
 
+## 本地默认运行方式
+
+当前脚本已经按本地部署做了默认配置。准备好目录后，在项目根目录直接运行即可：
+
+```powershell
+python scripts\infer_inpaint.py
+```
+
+默认行为：
+- 读取 `imgs/` 中的所有原图。
+- 读取 `masks/` 中同名掩码，启动时自动生成反码到 `masks_inverted/`。
+- 实际推理默认使用 `masks_inverted/`，并按 `--mask_mode black` 处理，即黑色区域为修补区、白色区域为保留区。
+- 输出保存到 `outputs/batch/`，文件名为 `<原文件名>_collage.png`。
+- 默认使用 `--steps 30 --guidance 5.0 --size 512 --rows 1 --seed 1234`。
+
+模型和权重放置位置：
+- 基础模型放在 `model/models--stabilityai--stable-diffusion-2-inpainting/snapshots/81a84f49b15956b60b4272a405ad3daef3da4590/`，该目录下应包含 `model_index.json`、`unet/`、`vae/`、`text_encoder/` 等 diffusers 文件。
+- UNet 微调权重放在 `weights/unet_partial_tuned.safetensors`。
+- 可选 LoRA 权重放在 `weights/lora_unet.safetensors`，运行时加 `--lora weights/lora_unet.safetensors`。
+- `model/`、`weights/`、`imgs/`、`masks/`、`masks_inverted/`、`outputs/` 都是本地数据目录，已被 `.gitignore` 忽略，不应提交到仓库。
+
 ## 数据目录约定
 
 - 单张推理：提供 `--image` 与 `--mask` 两个文件路径
 - 批量推理：按文件名匹配，目录为：
   - `imgs/` 放原图（支持递归子目录）
   - `masks/` 或 `masks_inverted/` 放掩码（支持递归子目录）
-- 掩码为黑白图：黑色=修补，白色=保留（见参数 `--mask_mode`）
+- 掩码为黑白图：黑色=修补，白色=保留（见参数 `--mask_mode`）。本地默认流程会先从 `masks/` 生成反码到 `masks_inverted/`，再用 `masks_inverted/` 的黑色区域作为修补区。
 - 若掩码与原图尺寸不同，脚本会用最近邻将掩码对齐到原图尺寸；原图不会被裁剪或填充。
 
 ## 掩码语义与尺寸适配
 
 - 掩码语义通过 `--mask_mode` 指定：
   - `--mask_mode black` 表示你的掩码“黑=修补、白=保留”（推荐）
-  - `--mask_mode white` 表示你的掩码“白=修补、黑=保留”（例如使用 `masks_inverted` 目录时）
-- 尺寸适配：为保证管线稳定，内部会将图与掩码缩放到“宽高为 8 的倍数”的尺寸送入模型，输出再缩回到原图尺寸；最终可视化与保存全部使用原图尺寸，无白边。
+  - `--mask_mode white` 表示你的掩码“白=修补、黑=保留”
+- 本地默认值是 `--mask_mode black`，并默认使用自动生成的 `masks_inverted/`。如果结果看起来修补区域反了，优先检查 `masks/` 原始掩码和 `masks_inverted/` 反码是否符合预期。
+- 尺寸适配：为保证管线稳定，内部会将图与掩码按 `--size` 控制的最长边缩放到“宽高为 8 的倍数”的尺寸送入模型，输出再缩回到原图尺寸；最终可视化与保存全部使用原图尺寸，无白边。若 `--size 0`，则按原图尺寸送入模型。
 
 ## 可视化输出（横排三图 × 竖向多行）
 
@@ -39,19 +61,20 @@
 
 ## 使用示例
 
-- 单张（最简用法，掩码白=修补）
-  - `python scripts/infer_inpaint.py --image F:\TraeSoloProject\imgs\pic.png --mask F:\TraeSoloProject\masks\pic.png`
+- 默认批量（推荐）
+  - `python scripts/infer_inpaint.py`
+  - 原图放入 `imgs/`，原始掩码放入 `masks/`，文件名保持一致；脚本会自动生成 `masks_inverted/` 并输出到 `outputs/batch/`。
 
-- 批量（最简用法，显式传目录）
-  - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks --output_dir outputs\batch`
+- 单张
+  - `python scripts/infer_inpaint.py --image imgs\pic.png --mask masks_inverted\pic.png --output outputs\result.png`
 
 可选参数（按需添加）：
 - 文本提示：`--prompt "修补佛像面部，保持原壁画风格与色彩"`（默认空）
-- 采样步数：`--steps 30~50`（默认 40）
+- 采样步数：`--steps 30~50`（默认 30）
 - 文本引导：`--guidance 4.5~6.5`（默认 5.0）
 - 分辨率：`--size 512/768`（默认 512）
-- 掩码语义：`--mask_mode white/black`（默认 white，白=修补）
-- 行数与间距：`--rows 4 --collage_spacing_h 20 --collage_spacing_v 20`
+- 掩码语义：`--mask_mode white/black`（默认 black，黑=修补）
+- 行数与间距：`--rows 1 --collage_spacing_h 20 --collage_spacing_v 20`
 - 输出路径（单张）：`--output outputs\result.png`
 - 批量输出目录：`--output_dir outputs\batch`
 - 加载 UNet 权重：`--unet_weights weights\unet_partial_tuned.safetensors`
@@ -103,40 +126,40 @@
 
 - `scripts/infer_inpaint.py` 推理与可视化脚本
 - `scripts/train_lora_inpaint.py` 轻量微调脚本
-- `weights/` 微调权重（如 `lora_unet.safetensors`）
+- `model/` 本地基础模型目录（不提交）
+- `weights/` 微调权重目录（不提交），默认读取 `weights/unet_partial_tuned.safetensors`
 - `outputs/` 推理与可视化输出（网格拼接 `*_collage.png`）
-- `imgs/`、`masks/`（或 `masks_inverted/`）原图与掩码目录
+- `imgs/`、`masks/`、`masks_inverted/` 原图、原始掩码与自动生成的反码目录
 - `train_data.zip` 训练数据压缩包（如需分享数据）
 
 ## 推荐使用流程
 
-1. 将原图放入 `imgs/`，掩码放入 `masks/`（黑=修补）或 `masks_inverted/`（白=修补），文件名保持一致
-2. 先批量生成网格对比：
-   - 黑=修补：
-     - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks --output_dir outputs/batch_grid --steps 30 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode black --rows 4 --collage_spacing_h 20 --collage_spacing_v 20 --seed 1234`
-   - 白=修补：
-     - `python scripts/infer_inpaint.py --batch_imgs_dir F:\TraeSoloProject\imgs --batch_masks_dir F:\TraeSoloProject\masks_inverted --output_dir outputs/batch_grid --steps 30 --guidance 5.0 --model stabilityai/stable-diffusion-2-inpainting --size 768 --mask_mode white --rows 4 --collage_spacing_h 20 --collage_spacing_v 20 --seed 1234`
-3. 若需要进一步贴合文物风格，执行轻量 LoRA 微调，再在推理命令中加入 `--lora` 参数对比前后
+1. 将基础模型放入 `model/models--stabilityai--stable-diffusion-2-inpainting/snapshots/81a84f49b15956b60b4272a405ad3daef3da4590/`。
+2. 将微调权重放入 `weights/unet_partial_tuned.safetensors`。
+3. 将原图放入 `imgs/`，原始掩码放入 `masks/`，文件名保持一致。
+4. 运行 `python scripts/infer_inpaint.py`。脚本会生成 `masks_inverted/`，再批量输出到 `outputs/batch/`。
+5. 若需要进一步贴合文物风格，执行轻量 LoRA 微调，再在推理命令中加入 `--lora` 参数对比前后。
 
 ## 尺寸适配与重采样（与代码一致）
 
-- 当前脚本会将输入图与掩码统一到“宽高为 8 的倍数”的尺寸送入 inpainting 管线，然后将输出回缩到原图尺寸（高质量插值）。
+- 当前脚本会将输入图与掩码按 `--size` 控制的最长边缩放到“宽高为 8 的倍数”的尺寸送入 inpainting 管线，然后将输出回缩到原图尺寸（高质量插值）。
 - 这能保证生成过程稳定，同时最终保存的三图拼接以原图尺寸为基准；但在高频纹理上可能产生轻微插值失真。若要减少失真，建议适度降低 `--size` 或 `--steps` 并观察对比。
 ## 当前脚本默认参数（与代码一致）
 
-- 模型：`--model stabilityai/stable-diffusion-2-inpainting`
+- 模型：`--model model/models--stabilityai--stable-diffusion-2-inpainting/snapshots/81a84f49b15956b60b4272a405ad3daef3da4590`
 - 分辨率：`--size 512`
-- 采样步数：`--steps 40`
+- 采样步数：`--steps 30`
 - 文本引导：`--guidance 5.0`
 - 输出路径（单张）：`--output outputs/result.png`
 - 文本提示：`--prompt ""`
 - LoRA 权重：`--lora None`
 - UNet 权重：`--unet_weights weights/unet_partial_tuned.safetensors`
-- 掩码语义：`--mask_mode white`（白=修补）
-- 批量目录：`--batch_imgs_dir`、`--batch_masks_dir` 默认未设置（需显式传入）；未设置时不会自动跑批量
+- 掩码语义：`--mask_mode black`（黑=修补）
+- 单张目录：`--image`、`--mask` 默认未设置；未设置时进入批量模式
+- 批量目录：`--batch_imgs_dir imgs`、`--batch_masks_dir masks_inverted`
 - 批量输出目录：`--output_dir outputs/batch`
-- 行数与间距：`--rows 4`，`--collage_spacing_h 20`，`--collage_spacing_v 20`
-- 随机种子：`--seed 0`（为 0 时每行随机）
+- 行数与间距：`--rows 1`，`--collage_spacing_h 20`，`--collage_spacing_v 20`
+- 随机种子：`--seed 1234`（为 0 时每行随机）
 ## 模型原理与实现细节
 
 - 核心思想：扩散模型的“条件去噪”

@@ -12,6 +12,7 @@ imgsorigin/
 masksorigin/
 masks_inverted/
 weights/
+model/
 
 # Local caches
 models_cache/
