@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from tqdm.auto import tqdm
 from diffusers import StableDiffusionInpaintPipeline, DDIMScheduler
-from diffusers.models.attention_processor import LoRAAttnProcessor2_0
+from peft import LoraConfig
 
 def list_images(dir_path):
     p = Path(dir_path)
@@ -67,16 +67,18 @@ class InpaintDataset(Dataset):
         return img_t, masked_img_t, mask
 
 def prepare_unet_lora(unet, rank=8):
-    attn_procs = {}
-    for name, base_proc in unet.attn_processors.items():
-        attn_procs[name] = LoRAAttnProcessor2_0()
-    unet.set_attn_processor(attn_procs)
-    # collect lora params
-    train_params = []
-    for n, p in unet.named_parameters():
-        if "lora" in n.lower():
-            p.requires_grad = True
-            train_params.append(p)
+    lora_config = LoraConfig(
+        r=rank,
+        lora_alpha=rank,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["to_q", "to_k", "to_v", "to_out.0"],
+    )
+    unet.add_adapter(lora_config)
+
+    train_params = [p for p in unet.parameters() if p.requires_grad]
+    if not train_params:
+        raise RuntimeError("LoRA adapter attached successfully, but no trainable parameters were found.")
     return train_params
 
 def main():
@@ -116,6 +118,10 @@ def main():
 
     image_dirs = [d.strip() for d in args.image_dirs.split(",") if d.strip()]
     ds = InpaintDataset(image_dirs, args.mask_dir, args.size)
+    if len(ds.images) == 0:
+        raise ValueError(f"No training images found in: {image_dirs}")
+    if len(ds.masks) == 0:
+        raise ValueError(f"No mask images found in: {args.mask_dir}")
     dl = DataLoader(ds, batch_size=args.batch, shuffle=True, num_workers=0)
 
     vae.eval()
@@ -145,9 +151,12 @@ def main():
             timesteps = torch.randint(0, pipe.scheduler.config.num_train_timesteps, (latents.shape[0],), device=device).long()
             noisy_latents = pipe.scheduler.add_noise(latents, noise, timesteps)
 
-            added = {"mask": mask_latents, "masked_image": masked_latents}
-            model_pred = unet(noisy_latents.to(unet.dtype), timesteps, encoder_hidden_states.to(unet.dtype), added_cond_kwargs=added).sample
+            # SD inpainting UNet expects 9 channels: noisy latents(4) + mask(1) + masked latents(4).
+            input_latents = torch.cat([noisy_latents, mask_latents[:, :1], masked_latents], dim=1)
+            model_pred = unet(input_latents.to(unet.dtype), timesteps, encoder_hidden_states.to(unet.dtype)).sample
             loss = F.mse_loss(model_pred, noise)
+            if not torch.isfinite(loss):
+                raise RuntimeError(f"Non-finite loss detected at step {global_step + 1}: {loss.item()}")
             loss.backward()
 
             if (global_step + 1) % args.accum == 0:
@@ -162,7 +171,7 @@ def main():
 
     # save LoRA
     os.makedirs(args.out, exist_ok=True)
-    unet.save_attn_procs(os.path.join(args.out, "lora_unet.safetensors"))
+    unet.save_attn_procs(args.out, weight_name="lora_unet.safetensors")
     pbar.close()
 
 if __name__ == "__main__":

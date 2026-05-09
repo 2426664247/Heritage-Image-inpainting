@@ -213,16 +213,19 @@ def main():
     pipe = pipe.to(device)  # 将模型移动到指定设备
 
     # --- 3. 加载自定义权重 (如果提供) ---
-    if args.lora:
-        print(f"正在加载 LoRA 权重: {args.lora}")
-        pipe.load_lora_weights(args.lora)
-        pipe.fuse_lora()  # 融合LoRA权重以加速推理
-
     if args.unet_weights:
         print(f"正在加载 UNet 权重: {args.unet_weights}")
         import safetensors.torch as st
         sd = st.load_file(args.unet_weights)  # 从safetensors文件加载状态字典
         pipe.unet.load_state_dict(sd, strict=False)  # 加载权重到UNet，strict=False允许部分加载
+
+    if args.lora:
+        print(f"正在加载 LoRA 权重: {args.lora}")
+        # Our training script saves a PEFT LoRA state dict without the legacy `unet.` prefix,
+        # so load it directly into the UNet and then fuse it for inference.
+        pipe.unet.load_lora_adapter(args.lora, prefix=None)
+        pipe.fuse_lora()  # 融合LoRA权重以加速推理
+        print("LoRA 已加载并融合到 UNet。")
 
     # --- 4. 定义单张图像处理函数 ---
     def run_single(image_path, mask_path, out_path):

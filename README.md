@@ -68,6 +68,9 @@ python scripts\infer_inpaint.py
 - 单张
   - `python scripts/infer_inpaint.py --image imgs\pic.png --mask masks_inverted\pic.png --output outputs\result.png`
 
+- 加载训练后的 LoRA 权重推理
+  - `python scripts/infer_inpaint.py --lora weights\lora_unet.safetensors --output outputs\result_lora.png`
+
 可选参数（按需添加）：
 - 文本提示：`--prompt "修补佛像面部，保持原壁画风格与色彩"`（默认空）
 - 采样步数：`--steps 30~50`（默认 30）
@@ -104,10 +107,27 @@ python scripts\infer_inpaint.py
 
 ## 训练（可选）
 
-- 轻量 LoRA 微调（快速贴合文物纹理域）：
-  - `python scripts/train_lora_inpaint.py --data_root train_data --size 512 --batch 1 --accum 4 --lr 1e-4 --steps 1000 --rank 16 --out weights --model stabilityai/stable-diffusion-2-inpainting`
-- 使用 LoRA 权重推理：
-  - 在命令中加入 `--lora weights/lora_unet.safetensors`
+- 推荐使用 `scripts/train_lora_inpaint_official.py` 做轻量 LoRA 微调。
+- 建议直接使用本地基础模型目录，不要依赖在线下载；否则可能遇到 Hugging Face 权限、缓存不完整或 401 问题。
+- 训练数据目录建议如下：
+  - `train_data/train/`、`train_data/raw/image/`、`train_data/test/` 中任意一个或多个目录放训练原图
+  - `train_data/mask/` 放训练掩码
+  - 支持图片格式：`.png`、`.jpg`、`.jpeg`、`.bmp`
+- 掩码语义：
+  - 训练脚本按“白色=修补区域，黑色=保留区域”读取掩码
+  - 若你的原始掩码是黑色表示修补区，请先转换成白色表示修补区后再训练
+- 推荐先用小参数做冒烟测试：
+  - `python scripts/train_lora_inpaint_official.py --image_dirs train_data\train,train_data\raw\image,train_data\test --mask_dir train_data\mask --size 384 --batch 1 --accum 1 --lr 1e-5 --steps 20 --rank 8 --out weights --model "model\models--stabilityai--stable-diffusion-2-inpainting\snapshots\81a84f49b15956b60b4272a405ad3daef3da4590" --log_interval 1`
+- 稳定训练推荐命令：
+  - `python scripts/train_lora_inpaint_official.py --image_dirs train_data\train,train_data\raw\image,train_data\test --mask_dir train_data\mask --size 384 --batch 1 --accum 4 --lr 1e-5 --steps 500 --rank 8 --out weights --model "model\models--stabilityai--stable-diffusion-2-inpainting\snapshots\81a84f49b15956b60b4272a405ad3daef3da4590"`
+- 输出结果：
+  - LoRA 权重默认保存在 `weights/lora_unet.safetensors`
+- 训练完成后推理：
+  - 在推理命令中加入 `--lora weights/lora_unet.safetensors`
+- 调参建议：
+  - 显存不足时，优先把 `--size` 降到 `256`
+  - 若 loss 出现 `nan`，优先把 `--lr` 降到 `5e-6`，并保持 `--size 256/384`
+  - 数据量较少时，先用 `--steps 100~300` 观察效果，再逐步增加
 
 ## 常见问题与排错
 
@@ -121,11 +141,19 @@ python scripts\infer_inpaint.py
   - 目录会递归扫描子目录，但仅支持 `.png/.jpg/.jpeg`
 - 显存不足/运行缓慢：
   - 将 `--size` 降低为 512 或降低 `--steps`；减少 `--rows`
+- 训练时报 `optimizer got an empty parameter list`：
+  - 请使用当前 README 中的 `scripts/train_lora_inpaint_official.py` 命令；旧版 LoRA 训练脚本与部分 `diffusers` 版本不兼容
+- 训练时报 `num_samples=0`：
+  - 检查 `train_data/train/`、`train_data/raw/image/`、`train_data/test/` 中是否至少有一个目录包含训练图像
+  - 检查 `train_data/mask/` 中是否有掩码图像
+- 训练时报模型下载或 401 错误：
+  - 优先将 `--model` 指向本地模型目录，不要直接使用 Hugging Face 仓库名
 
 ## 目录结构
 
 - `scripts/infer_inpaint.py` 推理与可视化脚本
-- `scripts/train_lora_inpaint.py` 轻量微调脚本
+- `scripts/train_lora_inpaint_official.py` 推荐使用的 LoRA 训练脚本
+- `scripts/train_lora_inpaint.py` 旧版训练脚本（不再推荐）
 - `model/` 本地基础模型目录（不提交）
 - `weights/` 微调权重目录（不提交），默认读取 `weights/unet_partial_tuned.safetensors`
 - `outputs/` 推理与可视化输出（网格拼接 `*_collage.png`）
@@ -138,7 +166,8 @@ python scripts\infer_inpaint.py
 2. 将微调权重放入 `weights/unet_partial_tuned.safetensors`。
 3. 将原图放入 `imgs/`，原始掩码放入 `masks/`，文件名保持一致。
 4. 运行 `python scripts/infer_inpaint.py`。脚本会生成 `masks_inverted/`，再批量输出到 `outputs/batch/`。
-5. 若需要进一步贴合文物风格，执行轻量 LoRA 微调，再在推理命令中加入 `--lora` 参数对比前后。
+5. 若需要进一步贴合文物风格，先按上文准备 `train_data/`，再使用 `python scripts/train_lora_inpaint_official.py ...` 训练 LoRA。
+6. 训练完成后，在推理命令中加入 `--lora weights/lora_unet.safetensors` 对比前后效果。
 
 ## 尺寸适配与重采样（与代码一致）
 
