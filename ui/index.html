@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>壁画数字化修复</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+    <script defer src="https://unpkg.com/lucide@latest"></script>
+    <script defer src="/ui/app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <h1>壁画数字化修复</h1>
+          </div>
+        </div>
+        <div class="run-state" id="runState">就绪</div>
+      </header>
+
+      <section class="workspace">
+        <section class="canvas-panel">
+          <div class="panel-title-row">
+            <h2>病害区域标注</h2>
+          </div>
+          <div class="toolrow">
+            <label class="tool-button primary" for="imageInput">
+              <i data-lucide="upload"></i>
+              <span>上传图片</span>
+            </label>
+            <input id="imageInput" type="file" accept="image/*" />
+            <button class="tool-button" id="undoPoint" type="button" disabled>
+              <i data-lucide="undo-2"></i>
+              <span>撤销点</span>
+            </button>
+            <button class="tool-button" id="finishPolygon" type="button" disabled>
+              <i data-lucide="check"></i>
+              <span>完成区域</span>
+            </button>
+            <button class="icon-button" id="clearMask" type="button" disabled title="清空掩码" aria-label="清空掩码">
+              <i data-lucide="trash-2"></i>
+            </button>
+            <span class="point-counter" id="pointCounter">0 个点</span>
+          </div>
+
+          <div class="stage-wrap">
+            <canvas id="maskCanvas"></canvas>
+            <div class="empty-state" id="emptyState">
+              <strong>上传图片</strong>
+              <span>点选边界后闭合修复区域</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="control-panel">
+          <section class="panel-section">
+            <h2>修复参数设置</h2>
+            <label class="field">
+              <span>修复引导提示词</span>
+              <textarea id="prompt" rows="3" placeholder="保持壁画色彩与纹理自然过渡"></textarea>
+            </label>
+
+            <div class="param-grid">
+              <label class="field compact">
+                <span>扩散采样步数</span>
+                <input id="steps" type="number" min="1" max="100" value="30" />
+              </label>
+              <label class="field compact">
+                <span>模型输入尺寸</span>
+                <input id="size" type="number" min="128" max="2048" step="64" value="512" />
+              </label>
+              <label class="field compact">
+                <span>提示词引导强度</span>
+                <input id="guidance" type="number" min="1" max="20" step="0.1" value="5.0" />
+              </label>
+              <label class="field compact">
+                <span>随机种子</span>
+                <input id="seed" type="number" min="0" max="2147483647" value="1234" />
+              </label>
+            </div>
+
+            <label class="switch-row">
+              <input id="trainBeforeRepair" type="checkbox" />
+              <span class="switch"></span>
+              <span>使用当前数据集快速训练</span>
+            </label>
+
+            <button class="run-button" id="startRepair" type="button" disabled>
+              <i data-lucide="wand-sparkles"></i>
+              <span>开始修复</span>
+            </button>
+            <div class="progress-wrap" id="progressWrap" aria-live="polite">
+              <div class="progress-meta">
+                <span id="progressLabel">等待任务</span>
+                <span id="progressValue">0%</span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill" id="progressFill"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel-section output-section">
+            <div class="section-head">
+              <h2>修复图</h2>
+              <a id="openResult" class="ghost-link" href="#" target="_blank" rel="noreferrer" hidden>打开修复图</a>
+            </div>
+            <div class="result-frame" id="resultFrame">
+              <span>暂无结果</span>
+              <img id="resultImage" alt="修复图" hidden />
+            </div>
+          </section>
+
+          <section class="panel-section log-section">
+            <h2>运行过程</h2>
+            <pre id="logBox">等待任务</pre>
+          </section>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>
