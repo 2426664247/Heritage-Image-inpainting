@@ -54,11 +54,11 @@ python scripts\ui_app.py --host 127.0.0.1 --port 7860
 
 | 页面选项 | 实际行为 | 所需本地文件 |
 | --- | --- | --- |
-| 两个 LoRA 选项均不启用（默认） | 使用基础 Stable Diffusion 2 Inpainting 模型自带的 UNet，不加载额外微调权重 | `model/.../81a84f49.../` |
-| 使用预训练 LoRA | 加载并融合已有 LoRA 后再进行修复 | `weights/lora_unet.safetensors` |
-| 使用当前数据集快速训练 | 先使用当前训练数据执行 20 steps、rank 8 的快速 LoRA 训练，再用本次生成的 LoRA 修复 | `train_data/` 下的训练图与掩码 |
+| 两个 LoRA 选项均不启用（默认） | 在基础 Stable Diffusion 2 Inpainting 模型上加载部分微调 UNet 权重 | `weights/unet_partial_tuned.safetensors` |
+| 使用预训练 LoRA | 先加载部分微调 UNet，再加载并融合已有 LoRA 后进行修复 | `weights/unet_partial_tuned.safetensors`、`weights/lora_unet.safetensors` |
+| 使用当前数据集快速训练 | 先使用当前训练数据执行 20 steps、rank 8 的快速 LoRA 训练，再将部分微调 UNet 与本次 LoRA 组合用于修复 | `weights/unet_partial_tuned.safetensors`、`train_data/` 下的训练图与掩码 |
 
-网页 UI 默认不会加载 `weights/unet_partial_tuned.safetensors`。这与 `scripts/infer_inpaint.py` 的终端默认值不同：终端脚本仍默认尝试加载该部分 UNet 权重。页面切换 LoRA 模式时会按需重新加载模型；若所需模型、权重或训练数据不存在，任务会失败并在日志中显示原因。
+网页 UI 与 `scripts/infer_inpaint.py` 现在都会默认加载 `weights/unet_partial_tuned.safetensors`。LoRA 是叠加在该部分微调 UNet 上的可选适配权重；页面切换 LoRA 模式时会按需重新加载模型。若所需模型、UNet 权重、LoRA 或训练数据不存在，任务会失败并在日志中显示原因。
 
 ### 实验命名、覆盖与产物目录
 
@@ -228,7 +228,7 @@ outputs/ui/jobs/<实验名称>/
 - `scripts/train_lora_inpaint_official.py` 推荐使用的 LoRA 训练脚本
 - `scripts/train_lora_inpaint.py` 旧版训练脚本（不再推荐）
 - `model/` 本地基础模型目录（不提交）
-- `weights/` 微调权重目录（不提交）；终端推理脚本默认读取 `weights/unet_partial_tuned.safetensors`，网页 UI 默认不读取
+- `weights/` 微调权重目录（不提交）；终端推理脚本和网页 UI 都默认读取 `weights/unet_partial_tuned.safetensors`
 - `outputs/` 推理与可视化输出；网页实验位于 `outputs/ui/jobs/<实验名称>/`，终端批量结果位于 `outputs/batch/`
 - `imgs/`、`masks/`、`masks_inverted/` 原图、原始掩码与自动生成的反码目录
 - `train_data.zip` 训练数据压缩包（如需分享数据）
@@ -302,7 +302,7 @@ outputs/ui/jobs/<实验名称>/
 
 - v0.2.0
   - 新增本地网页 UI，可上传图片并通过多边形交互绘制修复区域。
-  - 网页默认使用基础 UNet，并支持选择已有预训练 LoRA 或使用当前数据集快速训练 LoRA。
+  - 网页默认加载部分微调 UNet，并支持在此基础上选择已有预训练 LoRA 或使用当前数据集快速训练 LoRA。
   - 新增实验名称与同名覆盖机制，网页产物按实验名称保存，减少无用任务目录。
   - 新增独立的 `repair_area.png`，用纯白色覆盖在原图上标示拟修复区域。
   - 网页结果区提供拟修复区域和结果对比图的单独打开入口。

@@ -31,7 +31,7 @@ PRETRAINED_LORA = PROJECT_DIR / "weights" / "lora_unet.safetensors"
 
 app = FastAPI(title="Heritage Image Inpainting UI")
 executor = ThreadPoolExecutor(max_workers=1)
-runner = InpaintRunner(unet_weights=None)
+runner = InpaintRunner()
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.RLock()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -262,7 +262,7 @@ def run_job(job_id: str, params: dict[str, Any]) -> None:
             lora_path = PRETRAINED_LORA
             log_job(job_id, f"Using pretrained LoRA: {PRETRAINED_LORA.name}")
         else:
-            log_job(job_id, "Using base UNet without LoRA.")
+            log_job(job_id, "Using partial-tuned UNet without LoRA.")
 
         update_job(job_id, phase="Inpainting", progress=60, progress_label="正在加载修复模型")
         log_job(job_id, "Loading model and starting repair.")
