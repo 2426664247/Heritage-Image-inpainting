@@ -18,9 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 try:
-    from inpaint_core import DEFAULT_MODEL, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
+    from inpaint_core import DEFAULT_MODEL, DEFAULT_UNET_WEIGHTS, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
 except ModuleNotFoundError:
-    from scripts.inpaint_core import DEFAULT_MODEL, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
+    from scripts.inpaint_core import DEFAULT_MODEL, DEFAULT_UNET_WEIGHTS, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
 
 
 UI_DIR = PROJECT_DIR / "ui"
@@ -253,10 +253,14 @@ def run_job(job_id: str, params: dict[str, Any]) -> None:
         update_job(job_id, status="running", phase="Preparing", progress=3, progress_label="正在准备输入")
         log_job(job_id, "Received image and mask.")
 
+        runner.unet_weights = DEFAULT_UNET_WEIGHTS if params["use_partial_unet"] else None
+        if runner.unet_weights:
+            log_job(job_id, "Using partial-tuned UNet.")
+        else:
+            log_job(job_id, "Using base model UNet.")
+
         if params["train_before_repair"]:
             lora_path = run_training(job_id, job_dir)
-        else:
-            log_job(job_id, "Using partial-tuned UNet without LoRA.")
 
         update_job(job_id, phase="Inpainting", progress=60, progress_label="正在加载修复模型")
         log_job(job_id, "Loading model and starting repair.")
@@ -318,6 +322,7 @@ async def create_job(
     guidance: float = Form(5.0),
     size: int = Form(512),
     seed: int = Form(1234),
+    use_partial_unet: bool = Form(True),
     train_before_repair: bool = Form(False),
 ) -> dict[str, Any]:
     display_name, job_id = experiment_id_from_name(experiment_name)
@@ -339,6 +344,7 @@ async def create_job(
         "guidance": clamp_float(guidance, 1.0, 20.0),
         "size": clamp_int(size, 128, 2048),
         "seed": clamp_int(seed, 0, 2_147_483_647),
+        "use_partial_unet": bool(use_partial_unet),
         "train_before_repair": bool(train_before_repair),
     }
 

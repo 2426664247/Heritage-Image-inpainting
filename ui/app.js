@@ -24,6 +24,7 @@ const els = {
   guidance: document.getElementById("guidance"),
   size: document.getElementById("size"),
   seed: document.getElementById("seed"),
+  usePartialUnet: document.getElementById("usePartialUnet"),
   trainBeforeRepair: document.getElementById("trainBeforeRepair"),
   logBox: document.getElementById("logBox"),
   resultFrame: document.getElementById("resultFrame"),
@@ -205,6 +206,7 @@ async function createJob() {
   formData.append("guidance", String(clampNumber(els.guidance.value, 1, 20, 5)));
   formData.append("size", String(clampNumber(els.size.value, 128, 2048, 512)));
   formData.append("seed", String(clampNumber(els.seed.value, 0, 2147483647, 1234)));
+  formData.append("use_partial_unet", els.usePartialUnet.checked ? "true" : "false");
   formData.append("train_before_repair", els.trainBeforeRepair.checked ? "true" : "false");
 
   try {
