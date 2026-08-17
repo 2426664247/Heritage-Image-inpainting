@@ -18,15 +18,18 @@ const els = {
   pointCounter: document.getElementById("pointCounter"),
   startRepair: document.getElementById("startRepair"),
   runState: document.getElementById("runState"),
+  experimentName: document.getElementById("experimentName"),
   prompt: document.getElementById("prompt"),
   steps: document.getElementById("steps"),
   guidance: document.getElementById("guidance"),
   size: document.getElementById("size"),
   seed: document.getElementById("seed"),
+  usePretrainedLora: document.getElementById("usePretrainedLora"),
   trainBeforeRepair: document.getElementById("trainBeforeRepair"),
   logBox: document.getElementById("logBox"),
   resultFrame: document.getElementById("resultFrame"),
   resultImage: document.getElementById("resultImage"),
+  openRepairArea: document.getElementById("openRepairArea"),
   openResult: document.getElementById("openResult"),
   progressLabel: document.getElementById("progressLabel"),
   progressValue: document.getElementById("progressValue"),
@@ -63,10 +66,11 @@ function updateButtons() {
   const hasImage = Boolean(state.image);
   const hasCurrent = state.points.length > 0;
   const hasClosed = state.polygons.length > 0;
+  const hasExperimentName = Boolean(els.experimentName.value.trim());
   els.undoPoint.disabled = !hasCurrent;
   els.finishPolygon.disabled = state.points.length < 3;
   els.clearMask.disabled = !hasCurrent && !hasClosed;
-  els.startRepair.disabled = !hasImage || !hasClosed || els.startRepair.dataset.busy === "true";
+  els.startRepair.disabled = !hasImage || !hasClosed || !hasExperimentName || els.startRepair.dataset.busy === "true";
   const pointTotal = state.polygons.reduce((sum, poly) => sum + poly.length, 0) + state.points.length;
   const regionText = state.polygons.length ? `，${state.polygons.length} 个区域` : "";
   els.pointCounter.textContent = `${pointTotal} 个点${regionText}`;
@@ -135,6 +139,8 @@ function redraw() {
 function resetResult() {
   els.resultImage.hidden = true;
   els.resultImage.removeAttribute("src");
+  els.openRepairArea.hidden = true;
+  els.openRepairArea.href = "#";
   els.openResult.hidden = true;
   els.openResult.href = "#";
   els.resultFrame.querySelector("span").hidden = false;
@@ -182,7 +188,8 @@ function clearMask() {
 }
 
 async function createJob() {
-  if (!state.file || !state.polygons.length) return;
+  const experimentName = els.experimentName.value.trim();
+  if (!state.file || !state.polygons.length || !experimentName) return;
   els.startRepair.dataset.busy = "true";
   updateButtons();
   resetResult();
@@ -193,11 +200,13 @@ async function createJob() {
   const formData = new FormData();
   formData.append("image", state.file);
   formData.append("polygons", JSON.stringify(state.polygons));
+  formData.append("experiment_name", experimentName);
   formData.append("prompt", els.prompt.value);
   formData.append("steps", String(clampNumber(els.steps.value, 1, 100, 30)));
   formData.append("guidance", String(clampNumber(els.guidance.value, 1, 20, 5)));
   formData.append("size", String(clampNumber(els.size.value, 128, 2048, 512)));
   formData.append("seed", String(clampNumber(els.seed.value, 0, 2147483647, 1234)));
+  formData.append("use_pretrained_lora", els.usePretrainedLora.checked ? "true" : "false");
   formData.append("train_before_repair", els.trainBeforeRepair.checked ? "true" : "false");
 
   try {
@@ -230,6 +239,8 @@ function renderJob(job) {
     els.resultImage.src = imageUrl;
     els.resultImage.hidden = false;
     els.resultFrame.querySelector("span").hidden = true;
+    els.openRepairArea.href = job.repair_area_url;
+    els.openRepairArea.hidden = !job.repair_area_url;
     els.openResult.href = job.collage_url || job.result_url;
     els.openResult.hidden = false;
     stopPolling();
@@ -306,6 +317,13 @@ els.undoPoint.addEventListener("click", () => {
 els.finishPolygon.addEventListener("click", finishPolygon);
 els.clearMask.addEventListener("click", clearMask);
 els.startRepair.addEventListener("click", createJob);
+els.experimentName.addEventListener("input", updateButtons);
+els.usePretrainedLora.addEventListener("change", () => {
+  if (els.usePretrainedLora.checked) els.trainBeforeRepair.checked = false;
+});
+els.trainBeforeRepair.addEventListener("change", () => {
+  if (els.trainBeforeRepair.checked) els.usePretrainedLora.checked = false;
+});
 
 window.addEventListener("load", refreshIcons);
 refreshIcons();

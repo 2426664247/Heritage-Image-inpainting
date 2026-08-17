@@ -2,14 +2,15 @@ import argparse
 import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -26,30 +27,44 @@ UI_DIR = PROJECT_DIR / "ui"
 TRAIN_SCRIPT = PROJECT_DIR / "scripts" / "train_lora_inpaint_official.py"
 TRAIN_DATA_IMAGE_DIRS = "train_data/train,train_data/raw/image,train_data/test"
 TRAIN_DATA_MASK_DIR = "train_data/mask"
+PRETRAINED_LORA = PROJECT_DIR / "weights" / "lora_unet.safetensors"
 
 app = FastAPI(title="Heritage Image Inpainting UI")
 executor = ThreadPoolExecutor(max_workers=1)
-runner = InpaintRunner()
+runner = InpaintRunner(unet_weights=None)
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.RLock()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+INVALID_EXPERIMENT_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
 
 
 def now_ts() -> float:
     return time.time()
 
 
-def new_job_state(job_id: str) -> dict[str, Any]:
+def new_job_state(job_id: str, experiment_name: str) -> dict[str, Any]:
+    job_url_id = quote(job_id)
     return {
         "id": job_id,
+        "experiment_name": experiment_name,
+        "output_dir": str(UI_OUTPUT_ROOT / job_id),
         "status": "queued",
         "phase": "Queued",
         "logs": [],
         "error": None,
-        "input_url": f"/jobs/{job_id}/input.png",
-        "mask_url": f"/jobs/{job_id}/mask.png",
+        "input_url": f"/jobs/{job_url_id}/input.png",
+        "mask_url": f"/jobs/{job_url_id}/mask.png",
         "result_url": None,
         "collage_url": None,
+        "repair_area_url": None,
         "progress": 0,
         "progress_label": "等待任务",
         "created_at": now_ts(),
@@ -115,6 +130,21 @@ def clamp_int(value: int, min_value: int, max_value: int) -> int:
 
 def clamp_float(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, float(value)))
+
+
+def experiment_id_from_name(raw_name: str) -> tuple[str, str]:
+    experiment_name = raw_name.strip()
+    if not experiment_name:
+        raise HTTPException(status_code=400, detail="请输入实验名称")
+    if len(experiment_name) > 80:
+        raise HTTPException(status_code=400, detail="实验名称不能超过 80 个字符")
+
+    experiment_id = INVALID_EXPERIMENT_CHARS_RE.sub("_", experiment_name).strip(" .")
+    if not experiment_id:
+        raise HTTPException(status_code=400, detail="实验名称不能只包含路径特殊字符")
+    if experiment_id.split(".", 1)[0].upper() in WINDOWS_RESERVED_NAMES:
+        experiment_id = f"{experiment_id}_experiment"
+    return experiment_name, experiment_id
 
 
 def summarize_training_output(raw: str) -> list[str]:
@@ -218,6 +248,7 @@ def run_training(job_id: str, job_dir: Path) -> Path:
 
 def run_job(job_id: str, params: dict[str, Any]) -> None:
     job_dir = UI_OUTPUT_ROOT / job_id
+    job_url_id = quote(job_id)
     lora_path = None
     try:
         update_job(job_id, status="running", phase="Preparing", progress=3, progress_label="正在准备输入")
@@ -225,6 +256,13 @@ def run_job(job_id: str, params: dict[str, Any]) -> None:
 
         if params["train_before_repair"]:
             lora_path = run_training(job_id, job_dir)
+        elif params["use_pretrained_lora"]:
+            if not PRETRAINED_LORA.exists():
+                raise FileNotFoundError(f"Pretrained LoRA not found: {PRETRAINED_LORA}")
+            lora_path = PRETRAINED_LORA
+            log_job(job_id, f"Using pretrained LoRA: {PRETRAINED_LORA.name}")
+        else:
+            log_job(job_id, "Using base UNet without LoRA.")
 
         update_job(job_id, phase="Inpainting", progress=60, progress_label="正在加载修复模型")
         log_job(job_id, "Loading model and starting repair.")
@@ -260,8 +298,9 @@ def run_job(job_id: str, params: dict[str, Any]) -> None:
             phase="Done",
             progress=100,
             progress_label="修复完成",
-            result_url=f"/jobs/{job_id}/{result.result_path.name}",
-            collage_url=f"/jobs/{job_id}/{result.collage_path.name}",
+            result_url=f"/jobs/{job_url_id}/{result.result_path.name}",
+            collage_url=f"/jobs/{job_url_id}/{result.collage_path.name}",
+            repair_area_url=f"/jobs/{job_url_id}/{result.repair_area_path.name}",
         )
         log_job(job_id, "Job completed.")
     except Exception as exc:
@@ -279,13 +318,19 @@ def index() -> FileResponse:
 async def create_job(
     image: UploadFile = File(...),
     polygons: str = Form(...),
+    experiment_name: str = Form(...),
     prompt: str = Form(""),
     steps: int = Form(30),
     guidance: float = Form(5.0),
     size: int = Form(512),
     seed: int = Form(1234),
+    use_pretrained_lora: bool = Form(False),
     train_before_repair: bool = Form(False),
 ) -> dict[str, Any]:
+    if use_pretrained_lora and train_before_repair:
+        raise HTTPException(status_code=400, detail="Pretrained LoRA and quick LoRA training cannot be enabled together")
+
+    display_name, job_id = experiment_id_from_name(experiment_name)
     parsed_polygons = parse_polygons(polygons)
     image_bytes = await image.read()
     try:
@@ -293,17 +338,10 @@ async def create_job(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image") from exc
 
-    job_id = uuid.uuid4().hex[:12]
     job_dir = UI_OUTPUT_ROOT / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
-
-    input_path = job_dir / "input.png"
-    mask_path = job_dir / "mask.png"
-    pil_image.save(input_path)
     mask = mask_from_polygons(pil_image.size, parsed_polygons)
     if mask.getbbox() is None:
         raise HTTPException(status_code=400, detail="Mask is empty")
-    mask.save(mask_path)
 
     params = {
         "prompt": prompt.strip(),
@@ -311,15 +349,38 @@ async def create_job(
         "guidance": clamp_float(guidance, 1.0, 20.0),
         "size": clamp_int(size, 128, 2048),
         "seed": clamp_int(seed, 0, 2_147_483_647),
+        "use_pretrained_lora": bool(use_pretrained_lora),
         "train_before_repair": bool(train_before_repair),
     }
-    (job_dir / "request.json").write_text(
-        json.dumps({"params": params, "polygons": parsed_polygons}, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
     with jobs_lock:
-        jobs[job_id] = new_job_state(job_id)
+        matching_job_id = next((known_id for known_id in jobs if known_id.casefold() == job_id.casefold()), None)
+        existing_job = jobs.get(matching_job_id) if matching_job_id else None
+        if existing_job and existing_job["status"] in {"queued", "running"}:
+            raise HTTPException(status_code=409, detail="同名实验正在运行，请等待完成后再覆盖")
+        if matching_job_id and matching_job_id != job_id:
+            jobs.pop(matching_job_id)
+
+        resolved_root = UI_OUTPUT_ROOT.resolve()
+        resolved_job_dir = job_dir.resolve()
+        if resolved_job_dir.parent != resolved_root:
+            raise HTTPException(status_code=400, detail="实验名称生成的目录无效")
+        if job_dir.exists():
+            shutil.rmtree(job_dir)
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        pil_image.save(job_dir / "input.png")
+        mask.save(job_dir / "mask.png")
+        (job_dir / "request.json").write_text(
+            json.dumps(
+                {"experiment_name": display_name, "params": params, "polygons": parsed_polygons},
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        jobs[job_id] = new_job_state(job_id, display_name)
+        log_job(job_id, f"产物目录：{job_dir}")
     executor.submit(run_job, job_id, params)
     return get_job(job_id)
 

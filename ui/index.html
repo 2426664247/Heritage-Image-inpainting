@@ -58,6 +58,11 @@
           <section class="panel-section">
             <h2>修复参数设置</h2>
             <label class="field">
+              <span>实验名称</span>
+              <input id="experimentName" type="text" maxlength="80" placeholder="例如：敦煌壁画-基础模型-01" autocomplete="off" />
+              <small>同名实验会覆盖上一次产物</small>
+            </label>
+            <label class="field">
               <span>修复引导提示词</span>
               <textarea id="prompt" rows="3" placeholder="保持壁画色彩与纹理自然过渡"></textarea>
             </label>
@@ -80,6 +85,12 @@
                 <input id="seed" type="number" min="0" max="2147483647" value="1234" />
               </label>
             </div>
+
+            <label class="switch-row">
+              <input id="usePretrainedLora" type="checkbox" />
+              <span class="switch"></span>
+              <span>使用预训练 LoRA</span>
+            </label>
 
             <label class="switch-row">
               <input id="trainBeforeRepair" type="checkbox" />
@@ -105,7 +116,10 @@
           <section class="panel-section output-section">
             <div class="section-head">
               <h2>修复图</h2>
-              <a id="openResult" class="ghost-link" href="#" target="_blank" rel="noreferrer" hidden>打开修复图</a>
+              <div class="result-links">
+                <a id="openRepairArea" class="ghost-link" href="#" target="_blank" rel="noreferrer" hidden>打开拟修复区域</a>
+                <a id="openResult" class="ghost-link" href="#" target="_blank" rel="noreferrer" hidden>打开结果对比图</a>
+              </div>
             </div>
             <div class="result-frame" id="resultFrame">
               <span>暂无结果</span>
