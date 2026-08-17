@@ -13,6 +13,7 @@ const state = {
 const els = {
   imageInput: document.getElementById("imageInput"),
   maskInput: document.getElementById("maskInput"),
+  experimentFolderInput: document.getElementById("experimentFolderInput"),
   canvas: document.getElementById("maskCanvas"),
   emptyState: document.getElementById("emptyState"),
   undoPoint: document.getElementById("undoPoint"),
@@ -155,11 +156,25 @@ function resetResult() {
   els.resultFrame.querySelector("span").hidden = false;
 }
 
-function loadImage(file) {
-  const url = URL.createObjectURL(file);
-  const image = new Image();
-  image.onload = () => {
-    URL.revokeObjectURL(url);
+function imageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`无法读取图片：${file.name}`));
+    };
+    image.src = url;
+  });
+}
+
+async function loadImage(file) {
+  try {
+    const image = await imageFromFile(file);
     state.file = file;
     state.image = image;
     state.maskFile = null;
@@ -178,8 +193,12 @@ function loadImage(file) {
     setRunState("就绪");
     redraw();
     updateButtons();
-  };
-  image.src = url;
+    return true;
+  } catch (error) {
+    els.imageInput.value = "";
+    els.logBox.textContent = error.message;
+    return false;
+  }
 }
 
 function buildMaskOverlay(maskImage) {
@@ -200,30 +219,85 @@ function buildMaskOverlay(maskImage) {
   return overlay;
 }
 
-function loadMask(file) {
+async function loadMask(file) {
   if (!state.image) {
     els.maskInput.value = "";
     els.logBox.textContent = "请先上传原图，再导入掩码。";
-    return;
+    return false;
   }
 
-  const url = URL.createObjectURL(file);
-  const maskImage = new Image();
-  maskImage.onload = () => {
-    URL.revokeObjectURL(url);
+  try {
+    const maskImage = await imageFromFile(file);
     state.maskFile = file;
     state.maskOverlay = buildMaskOverlay(maskImage);
     resetResult();
     els.logBox.textContent = `已导入掩码：${file.name}\n白色为修复区，黑色为保留区。`;
     redraw();
     updateButtons();
-  };
-  maskImage.onerror = () => {
-    URL.revokeObjectURL(url);
+    return true;
+  } catch (error) {
     els.maskInput.value = "";
-    els.logBox.textContent = "掩码文件无法读取，请选择有效的图片。";
-  };
-  maskImage.src = url;
+    els.logBox.textContent = error.message;
+    return false;
+  }
+}
+
+function restoreField(element, value) {
+  if (value !== undefined && value !== null) {
+    element.value = String(value);
+  }
+}
+
+async function importExperiment(fileList) {
+  const files = Array.from(fileList);
+  const findFile = (name) => files.find((file) => file.name.toLowerCase() === name);
+  const imageFile = findFile("input.png");
+  const maskFile = findFile("mask.png");
+  const requestFile = findFile("request.json");
+
+  if (!imageFile || !maskFile || !requestFile) {
+    els.logBox.textContent = "所选文件夹不是完整实验目录，需要包含 input.png、mask.png 和 request.json。";
+    els.experimentFolderInput.value = "";
+    return;
+  }
+
+  let request;
+  try {
+    request = JSON.parse(await requestFile.text());
+  } catch (error) {
+    els.logBox.textContent = "request.json 无法读取，请确认历史实验文件完整。";
+    els.experimentFolderInput.value = "";
+    return;
+  }
+
+  if (!(await loadImage(imageFile)) || !(await loadMask(maskFile))) {
+    els.experimentFolderInput.value = "";
+    return;
+  }
+
+  const params = request.params || {};
+  const relativePath = requestFile.webkitRelativePath || "";
+  const folderName = relativePath.split("/")[0] || "历史实验";
+  els.experimentName.value = request.experiment_name || folderName;
+  restoreField(els.prompt, params.prompt);
+  restoreField(els.steps, params.steps);
+  restoreField(els.guidance, params.guidance);
+  restoreField(els.size, params.size);
+  restoreField(els.seed, params.seed);
+  if (params.use_partial_unet !== undefined) {
+    els.usePartialUnet.checked = Boolean(params.use_partial_unet);
+  }
+  if (params.train_before_repair !== undefined) {
+    els.trainBeforeRepair.checked = Boolean(params.train_before_repair);
+  }
+
+  updateButtons();
+  els.logBox.textContent = [
+    `已恢复历史实验：${els.experimentName.value}`,
+    "已载入原图、最终掩码和上次运行参数。",
+    "再次开始修复会覆盖该实验的旧产物。",
+  ].join("\n");
+  els.experimentFolderInput.value = "";
 }
 
 function finishPolygon() {
@@ -352,6 +426,10 @@ els.imageInput.addEventListener("change", (event) => {
 els.maskInput.addEventListener("change", (event) => {
   const [file] = event.target.files;
   if (file) loadMask(file);
+});
+
+els.experimentFolderInput.addEventListener("change", (event) => {
+  if (event.target.files.length) importExperiment(event.target.files);
 });
 
 els.canvas.addEventListener("click", (event) => {

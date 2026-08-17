@@ -144,7 +144,8 @@ button {
 }
 
 #imageInput,
-#maskInput {
+#maskInput,
+#experimentFolderInput {
   display: none;
 }
 

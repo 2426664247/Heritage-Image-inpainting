@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>壁画数字化修复</title>
-    <link rel="stylesheet" href="/ui/styles.css" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260817-history-import" />
     <script defer src="https://unpkg.com/lucide@latest"></script>
-    <script defer src="/ui/app.js"></script>
+    <script defer src="/ui/app.js?v=20260817-history-import"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -30,12 +30,17 @@
               <i data-lucide="upload"></i>
               <span>上传图片</span>
             </label>
-            <input id="imageInput" type="file" accept="image/*" />
+            <input id="imageInput" type="file" accept="image/*" hidden />
             <label class="tool-button" for="maskInput" title="白色为修复区，黑色为保留区">
               <i data-lucide="scan"></i>
               <span>导入掩码</span>
             </label>
-            <input id="maskInput" type="file" accept="image/*" />
+            <input id="maskInput" type="file" accept="image/*" hidden />
+            <label class="tool-button" for="experimentFolderInput" title="恢复原图、最终掩码和上次参数">
+              <i data-lucide="folder-input"></i>
+              <span>导入历史实验</span>
+            </label>
+            <input id="experimentFolderInput" type="file" webkitdirectory directory multiple hidden />
             <button class="tool-button" id="undoPoint" type="button" disabled>
               <i data-lucide="undo-2"></i>
               <span>撤销点</span>
