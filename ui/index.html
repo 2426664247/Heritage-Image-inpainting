@@ -31,6 +31,11 @@
               <span>上传图片</span>
             </label>
             <input id="imageInput" type="file" accept="image/*" />
+            <label class="tool-button" for="maskInput" title="白色为修复区，黑色为保留区">
+              <i data-lucide="scan"></i>
+              <span>导入掩码</span>
+            </label>
+            <input id="maskInput" type="file" accept="image/*" />
             <button class="tool-button" id="undoPoint" type="button" disabled>
               <i data-lucide="undo-2"></i>
               <span>撤销点</span>
@@ -49,7 +54,7 @@
             <canvas id="maskCanvas"></canvas>
             <div class="empty-state" id="emptyState">
               <strong>上传图片</strong>
-              <span>点选边界后闭合修复区域</span>
+              <span>随后绘制修复区域或导入黑白掩码</span>
             </div>
           </div>
         </section>

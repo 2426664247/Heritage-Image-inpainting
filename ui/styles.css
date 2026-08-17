@@ -143,7 +143,8 @@ button {
   min-height: 44px;
 }
 
-#imageInput {
+#imageInput,
+#maskInput {
   display: none;
 }
 

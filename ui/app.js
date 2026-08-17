@@ -1,6 +1,8 @@
 const state = {
   file: null,
   image: null,
+  maskFile: null,
+  maskOverlay: null,
   points: [],
   polygons: [],
   hover: null,
@@ -10,6 +12,7 @@ const state = {
 
 const els = {
   imageInput: document.getElementById("imageInput"),
+  maskInput: document.getElementById("maskInput"),
   canvas: document.getElementById("maskCanvas"),
   emptyState: document.getElementById("emptyState"),
   undoPoint: document.getElementById("undoPoint"),
@@ -66,14 +69,16 @@ function updateButtons() {
   const hasImage = Boolean(state.image);
   const hasCurrent = state.points.length > 0;
   const hasClosed = state.polygons.length > 0;
+  const hasMask = hasClosed || Boolean(state.maskFile);
   const hasExperimentName = Boolean(els.experimentName.value.trim());
   els.undoPoint.disabled = !hasCurrent;
   els.finishPolygon.disabled = state.points.length < 3;
-  els.clearMask.disabled = !hasCurrent && !hasClosed;
-  els.startRepair.disabled = !hasImage || !hasClosed || !hasExperimentName || els.startRepair.dataset.busy === "true";
+  els.clearMask.disabled = !hasCurrent && !hasMask;
+  els.startRepair.disabled = !hasImage || !hasMask || !hasExperimentName || els.startRepair.dataset.busy === "true";
   const pointTotal = state.polygons.reduce((sum, poly) => sum + poly.length, 0) + state.points.length;
   const regionText = state.polygons.length ? `，${state.polygons.length} 个区域` : "";
-  els.pointCounter.textContent = `${pointTotal} 个点${regionText}`;
+  const importText = state.maskFile ? "，已导入掩码" : "";
+  els.pointCounter.textContent = `${pointTotal} 个点${regionText}${importText}`;
 }
 
 function canvasPoint(event) {
@@ -124,6 +129,10 @@ function redraw() {
   if (!state.image) return;
   ctx.drawImage(state.image, 0, 0, els.canvas.width, els.canvas.height);
 
+  if (state.maskOverlay) {
+    ctx.drawImage(state.maskOverlay, 0, 0);
+  }
+
   for (const polygon of state.polygons) {
     drawPolygon(polygon, "rgba(255, 255, 255, 0.48)", "#b45309", true);
     polygon.forEach(drawPoint);
@@ -153,9 +162,12 @@ function loadImage(file) {
     URL.revokeObjectURL(url);
     state.file = file;
     state.image = image;
+    state.maskFile = null;
+    state.maskOverlay = null;
     state.points = [];
     state.polygons = [];
     state.hover = null;
+    els.maskInput.value = "";
     els.canvas.width = image.naturalWidth;
     els.canvas.height = image.naturalHeight;
     els.canvas.style.display = "block";
@@ -168,6 +180,50 @@ function loadImage(file) {
     updateButtons();
   };
   image.src = url;
+}
+
+function buildMaskOverlay(maskImage) {
+  const overlay = document.createElement("canvas");
+  overlay.width = els.canvas.width;
+  overlay.height = els.canvas.height;
+  const overlayCtx = overlay.getContext("2d", { willReadFrequently: true });
+  overlayCtx.drawImage(maskImage, 0, 0, overlay.width, overlay.height);
+  const pixels = overlayCtx.getImageData(0, 0, overlay.width, overlay.height);
+  for (let index = 0; index < pixels.data.length; index += 4) {
+    const isRepair = Math.max(pixels.data[index], pixels.data[index + 1], pixels.data[index + 2]) >= 128;
+    pixels.data[index] = 255;
+    pixels.data[index + 1] = 255;
+    pixels.data[index + 2] = 255;
+    pixels.data[index + 3] = isRepair ? 165 : 0;
+  }
+  overlayCtx.putImageData(pixels, 0, 0);
+  return overlay;
+}
+
+function loadMask(file) {
+  if (!state.image) {
+    els.maskInput.value = "";
+    els.logBox.textContent = "请先上传原图，再导入掩码。";
+    return;
+  }
+
+  const url = URL.createObjectURL(file);
+  const maskImage = new Image();
+  maskImage.onload = () => {
+    URL.revokeObjectURL(url);
+    state.maskFile = file;
+    state.maskOverlay = buildMaskOverlay(maskImage);
+    resetResult();
+    els.logBox.textContent = `已导入掩码：${file.name}\n白色为修复区，黑色为保留区。`;
+    redraw();
+    updateButtons();
+  };
+  maskImage.onerror = () => {
+    URL.revokeObjectURL(url);
+    els.maskInput.value = "";
+    els.logBox.textContent = "掩码文件无法读取，请选择有效的图片。";
+  };
+  maskImage.src = url;
 }
 
 function finishPolygon() {
@@ -183,13 +239,16 @@ function clearMask() {
   state.points = [];
   state.polygons = [];
   state.hover = null;
+  state.maskFile = null;
+  state.maskOverlay = null;
+  els.maskInput.value = "";
   redraw();
   updateButtons();
 }
 
 async function createJob() {
   const experimentName = els.experimentName.value.trim();
-  if (!state.file || !state.polygons.length || !experimentName) return;
+  if (!state.file || (!state.polygons.length && !state.maskFile) || !experimentName) return;
   els.startRepair.dataset.busy = "true";
   updateButtons();
   resetResult();
@@ -199,6 +258,7 @@ async function createJob() {
 
   const formData = new FormData();
   formData.append("image", state.file);
+  if (state.maskFile) formData.append("mask", state.maskFile);
   formData.append("polygons", JSON.stringify(state.polygons));
   formData.append("experiment_name", experimentName);
   formData.append("prompt", els.prompt.value);
@@ -287,6 +347,11 @@ function stopPolling() {
 els.imageInput.addEventListener("change", (event) => {
   const [file] = event.target.files;
   if (file) loadImage(file);
+});
+
+els.maskInput.addEventListener("change", (event) => {
+  const [file] = event.target.files;
+  if (file) loadMask(file);
 });
 
 els.canvas.addEventListener("click", (event) => {

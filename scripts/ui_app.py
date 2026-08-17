@@ -15,7 +15,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
+from PIL import Image, ImageChops
 
 try:
     from inpaint_core import DEFAULT_MODEL, DEFAULT_UNET_WEIGHTS, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
@@ -118,9 +118,18 @@ def parse_polygons(raw: str) -> list[list[dict[str, float]]]:
         if len(points) >= 3:
             parsed.append(points)
 
-    if not parsed:
-        raise HTTPException(status_code=400, detail="Draw at least one closed polygon")
     return parsed
+
+
+def prepare_uploaded_mask(mask_bytes: bytes, image_size: tuple[int, int]) -> Image.Image:
+    try:
+        uploaded_mask = Image.open(io.BytesIO(mask_bytes)).convert("L")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Uploaded mask is not a valid image") from exc
+
+    if uploaded_mask.size != image_size:
+        uploaded_mask = uploaded_mask.resize(image_size, Image.Resampling.NEAREST)
+    return uploaded_mask.point(lambda value: 255 if value >= 128 else 0)
 
 
 def clamp_int(value: int, min_value: int, max_value: int) -> int:
@@ -315,7 +324,8 @@ def index() -> FileResponse:
 @app.post("/api/jobs")
 async def create_job(
     image: UploadFile = File(...),
-    polygons: str = Form(...),
+    mask: Optional[UploadFile] = File(None),
+    polygons: str = Form("[]"),
     experiment_name: str = Form(...),
     prompt: str = Form(""),
     steps: int = Form(30),
@@ -334,9 +344,23 @@ async def create_job(
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image") from exc
 
     job_dir = UI_OUTPUT_ROOT / job_id
-    mask = mask_from_polygons(pil_image.size, parsed_polygons)
-    if mask.getbbox() is None:
-        raise HTTPException(status_code=400, detail="Mask is empty")
+    drawn_mask = mask_from_polygons(pil_image.size, parsed_polygons)
+    uploaded_mask = None
+    if mask is not None:
+        mask_bytes = await mask.read()
+        if mask_bytes:
+            uploaded_mask = prepare_uploaded_mask(mask_bytes, pil_image.size)
+
+    final_mask = ImageChops.lighter(drawn_mask, uploaded_mask) if uploaded_mask is not None else drawn_mask
+    if final_mask.getbbox() is None:
+        raise HTTPException(status_code=400, detail="请绘制修复区域或导入非空掩码")
+
+    if uploaded_mask is not None and parsed_polygons:
+        mask_source = "combined"
+    elif uploaded_mask is not None:
+        mask_source = "uploaded"
+    else:
+        mask_source = "drawn"
 
     params = {
         "prompt": prompt.strip(),
@@ -365,10 +389,16 @@ async def create_job(
         job_dir.mkdir(parents=True, exist_ok=True)
 
         pil_image.save(job_dir / "input.png")
-        mask.save(job_dir / "mask.png")
+        final_mask.save(job_dir / "mask.png")
         (job_dir / "request.json").write_text(
             json.dumps(
-                {"experiment_name": display_name, "params": params, "polygons": parsed_polygons},
+                {
+                    "experiment_name": display_name,
+                    "params": params,
+                    "mask_source": mask_source,
+                    "uploaded_mask_name": mask.filename if uploaded_mask is not None else None,
+                    "polygons": parsed_polygons,
+                },
                 indent=2,
                 ensure_ascii=False,
             ),
