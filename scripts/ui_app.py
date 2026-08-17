@@ -27,7 +27,6 @@ UI_DIR = PROJECT_DIR / "ui"
 TRAIN_SCRIPT = PROJECT_DIR / "scripts" / "train_lora_inpaint_official.py"
 TRAIN_DATA_IMAGE_DIRS = "train_data/train,train_data/raw/image,train_data/test"
 TRAIN_DATA_MASK_DIR = "train_data/mask"
-PRETRAINED_LORA = PROJECT_DIR / "weights" / "lora_unet.safetensors"
 
 app = FastAPI(title="Heritage Image Inpainting UI")
 executor = ThreadPoolExecutor(max_workers=1)
@@ -256,11 +255,6 @@ def run_job(job_id: str, params: dict[str, Any]) -> None:
 
         if params["train_before_repair"]:
             lora_path = run_training(job_id, job_dir)
-        elif params["use_pretrained_lora"]:
-            if not PRETRAINED_LORA.exists():
-                raise FileNotFoundError(f"Pretrained LoRA not found: {PRETRAINED_LORA}")
-            lora_path = PRETRAINED_LORA
-            log_job(job_id, f"Using pretrained LoRA: {PRETRAINED_LORA.name}")
         else:
             log_job(job_id, "Using partial-tuned UNet without LoRA.")
 
@@ -324,12 +318,8 @@ async def create_job(
     guidance: float = Form(5.0),
     size: int = Form(512),
     seed: int = Form(1234),
-    use_pretrained_lora: bool = Form(False),
     train_before_repair: bool = Form(False),
 ) -> dict[str, Any]:
-    if use_pretrained_lora and train_before_repair:
-        raise HTTPException(status_code=400, detail="Pretrained LoRA and quick LoRA training cannot be enabled together")
-
     display_name, job_id = experiment_id_from_name(experiment_name)
     parsed_polygons = parse_polygons(polygons)
     image_bytes = await image.read()
@@ -349,7 +339,6 @@ async def create_job(
         "guidance": clamp_float(guidance, 1.0, 20.0),
         "size": clamp_int(size, 128, 2048),
         "seed": clamp_int(seed, 0, 2_147_483_647),
-        "use_pretrained_lora": bool(use_pretrained_lora),
         "train_before_repair": bool(train_before_repair),
     }
 

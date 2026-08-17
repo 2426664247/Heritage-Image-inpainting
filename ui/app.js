@@ -24,7 +24,6 @@ const els = {
   guidance: document.getElementById("guidance"),
   size: document.getElementById("size"),
   seed: document.getElementById("seed"),
-  usePretrainedLora: document.getElementById("usePretrainedLora"),
   trainBeforeRepair: document.getElementById("trainBeforeRepair"),
   logBox: document.getElementById("logBox"),
   resultFrame: document.getElementById("resultFrame"),
@@ -206,7 +205,6 @@ async function createJob() {
   formData.append("guidance", String(clampNumber(els.guidance.value, 1, 20, 5)));
   formData.append("size", String(clampNumber(els.size.value, 128, 2048, 512)));
   formData.append("seed", String(clampNumber(els.seed.value, 0, 2147483647, 1234)));
-  formData.append("use_pretrained_lora", els.usePretrainedLora.checked ? "true" : "false");
   formData.append("train_before_repair", els.trainBeforeRepair.checked ? "true" : "false");
 
   try {
@@ -318,12 +316,6 @@ els.finishPolygon.addEventListener("click", finishPolygon);
 els.clearMask.addEventListener("click", clearMask);
 els.startRepair.addEventListener("click", createJob);
 els.experimentName.addEventListener("input", updateButtons);
-els.usePretrainedLora.addEventListener("change", () => {
-  if (els.usePretrainedLora.checked) els.trainBeforeRepair.checked = false;
-});
-els.trainBeforeRepair.addEventListener("change", () => {
-  if (els.trainBeforeRepair.checked) els.usePretrainedLora.checked = false;
-});
 
 window.addEventListener("load", refreshIcons);
 refreshIcons();

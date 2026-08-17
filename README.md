@@ -46,7 +46,7 @@ python scripts\ui_app.py --host 127.0.0.1 --port 7860
 2. 上传一张待修复原图。
 3. 在图像上依次点击病害区域边界，至少选择 3 个点，然后点击“完成区域”。可以重复绘制多个区域，也可以撤销点或清空掩码。
 4. 按需填写提示词，并设置采样步数、模型输入尺寸、提示词引导强度和随机种子。
-5. 选择模型模式。预训练 LoRA 与快速训练 LoRA 互斥，不能同时启用。
+5. 按需选择“使用当前数据集快速训练”。不启用时直接使用默认的部分微调 UNet；启用后会先训练本次实验专属 LoRA。
 6. 点击“开始修复”，右侧会持续显示当前阶段、进度和简化日志。
 7. 完成后可在页面中查看结果对比图，并分别打开拟修复区域示意图和结果对比图。
 
@@ -54,11 +54,10 @@ python scripts\ui_app.py --host 127.0.0.1 --port 7860
 
 | 页面选项 | 实际行为 | 所需本地文件 |
 | --- | --- | --- |
-| 两个 LoRA 选项均不启用（默认） | 在基础 Stable Diffusion 2 Inpainting 模型上加载部分微调 UNet 权重 | `weights/unet_partial_tuned.safetensors` |
-| 使用预训练 LoRA | 先加载部分微调 UNet，再加载并融合已有 LoRA 后进行修复 | `weights/unet_partial_tuned.safetensors`、`weights/lora_unet.safetensors` |
+| 不启用快速训练（默认） | 在基础 Stable Diffusion 2 Inpainting 模型上加载部分微调 UNet 权重 | `weights/unet_partial_tuned.safetensors` |
 | 使用当前数据集快速训练 | 先使用当前训练数据执行 20 steps、rank 8 的快速 LoRA 训练，再将部分微调 UNet 与本次 LoRA 组合用于修复 | `weights/unet_partial_tuned.safetensors`、`train_data/` 下的训练图与掩码 |
 
-网页 UI 与 `scripts/infer_inpaint.py` 现在都会默认加载 `weights/unet_partial_tuned.safetensors`。LoRA 是叠加在该部分微调 UNet 上的可选适配权重；页面切换 LoRA 模式时会按需重新加载模型。若所需模型、UNet 权重、LoRA 或训练数据不存在，任务会失败并在日志中显示原因。
+网页 UI 与 `scripts/infer_inpaint.py` 都会默认加载 `weights/unet_partial_tuned.safetensors`。网页不再提供已有预训练 LoRA 的加载选项；只有启用快速训练时，才会生成并加载本次实验专属 LoRA。若所需模型、UNet 权重或训练数据不存在，任务会失败并在日志中显示原因。
 
 ### 实验命名、覆盖与产物目录
 
@@ -302,7 +301,7 @@ outputs/ui/jobs/<实验名称>/
 
 - v0.2.0
   - 新增本地网页 UI，可上传图片并通过多边形交互绘制修复区域。
-  - 网页默认加载部分微调 UNet，并支持在此基础上选择已有预训练 LoRA 或使用当前数据集快速训练 LoRA。
+  - 网页默认加载部分微调 UNet，并支持在此基础上使用当前数据集快速训练本次实验专属 LoRA。
   - 新增实验名称与同名覆盖机制，网页产物按实验名称保存，减少无用任务目录。
   - 新增独立的 `repair_area.png`，用纯白色覆盖在原图上标示拟修复区域。
   - 网页结果区提供拟修复区域和结果对比图的单独打开入口。
