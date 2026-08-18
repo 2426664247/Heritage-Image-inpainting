@@ -2,24 +2,25 @@ import argparse
 import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
+from PIL import Image, ImageChops
 
 try:
-    from inpaint_core import DEFAULT_MODEL, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
+    from inpaint_core import DEFAULT_MODEL, DEFAULT_UNET_WEIGHTS, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
 except ModuleNotFoundError:
-    from scripts.inpaint_core import DEFAULT_MODEL, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
+    from scripts.inpaint_core import DEFAULT_MODEL, DEFAULT_UNET_WEIGHTS, PROJECT_DIR, UI_OUTPUT_ROOT, InpaintRunner, mask_from_polygons
 
 
 UI_DIR = PROJECT_DIR / "ui"
@@ -33,23 +34,36 @@ runner = InpaintRunner()
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.RLock()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+INVALID_EXPERIMENT_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
 
 
 def now_ts() -> float:
     return time.time()
 
 
-def new_job_state(job_id: str) -> dict[str, Any]:
+def new_job_state(job_id: str, experiment_name: str) -> dict[str, Any]:
+    job_url_id = quote(job_id)
     return {
         "id": job_id,
+        "experiment_name": experiment_name,
+        "output_dir": str(UI_OUTPUT_ROOT / job_id),
         "status": "queued",
         "phase": "Queued",
         "logs": [],
         "error": None,
-        "input_url": f"/jobs/{job_id}/input.png",
-        "mask_url": f"/jobs/{job_id}/mask.png",
+        "input_url": f"/jobs/{job_url_id}/input.png",
+        "mask_url": f"/jobs/{job_url_id}/mask.png",
         "result_url": None,
         "collage_url": None,
+        "repair_area_url": None,
         "progress": 0,
         "progress_label": "等待任务",
         "created_at": now_ts(),
@@ -104,9 +118,18 @@ def parse_polygons(raw: str) -> list[list[dict[str, float]]]:
         if len(points) >= 3:
             parsed.append(points)
 
-    if not parsed:
-        raise HTTPException(status_code=400, detail="Draw at least one closed polygon")
     return parsed
+
+
+def prepare_uploaded_mask(mask_bytes: bytes, image_size: tuple[int, int]) -> Image.Image:
+    try:
+        uploaded_mask = Image.open(io.BytesIO(mask_bytes)).convert("L")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Uploaded mask is not a valid image") from exc
+
+    if uploaded_mask.size != image_size:
+        uploaded_mask = uploaded_mask.resize(image_size, Image.Resampling.NEAREST)
+    return uploaded_mask.point(lambda value: 255 if value >= 128 else 0)
 
 
 def clamp_int(value: int, min_value: int, max_value: int) -> int:
@@ -115,6 +138,21 @@ def clamp_int(value: int, min_value: int, max_value: int) -> int:
 
 def clamp_float(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, float(value)))
+
+
+def experiment_id_from_name(raw_name: str) -> tuple[str, str]:
+    experiment_name = raw_name.strip()
+    if not experiment_name:
+        raise HTTPException(status_code=400, detail="请输入实验名称")
+    if len(experiment_name) > 80:
+        raise HTTPException(status_code=400, detail="实验名称不能超过 80 个字符")
+
+    experiment_id = INVALID_EXPERIMENT_CHARS_RE.sub("_", experiment_name).strip(" .")
+    if not experiment_id:
+        raise HTTPException(status_code=400, detail="实验名称不能只包含路径特殊字符")
+    if experiment_id.split(".", 1)[0].upper() in WINDOWS_RESERVED_NAMES:
+        experiment_id = f"{experiment_id}_experiment"
+    return experiment_name, experiment_id
 
 
 def summarize_training_output(raw: str) -> list[str]:
@@ -218,10 +256,17 @@ def run_training(job_id: str, job_dir: Path) -> Path:
 
 def run_job(job_id: str, params: dict[str, Any]) -> None:
     job_dir = UI_OUTPUT_ROOT / job_id
+    job_url_id = quote(job_id)
     lora_path = None
     try:
         update_job(job_id, status="running", phase="Preparing", progress=3, progress_label="正在准备输入")
         log_job(job_id, "Received image and mask.")
+
+        runner.unet_weights = DEFAULT_UNET_WEIGHTS if params["use_partial_unet"] else None
+        if runner.unet_weights:
+            log_job(job_id, "Using partial-tuned UNet.")
+        else:
+            log_job(job_id, "Using base model UNet.")
 
         if params["train_before_repair"]:
             lora_path = run_training(job_id, job_dir)
@@ -260,8 +305,9 @@ def run_job(job_id: str, params: dict[str, Any]) -> None:
             phase="Done",
             progress=100,
             progress_label="修复完成",
-            result_url=f"/jobs/{job_id}/{result.result_path.name}",
-            collage_url=f"/jobs/{job_id}/{result.collage_path.name}",
+            result_url=f"/jobs/{job_url_id}/{result.result_path.name}",
+            collage_url=f"/jobs/{job_url_id}/{result.collage_path.name}",
+            repair_area_url=f"/jobs/{job_url_id}/{result.repair_area_path.name}",
         )
         log_job(job_id, "Job completed.")
     except Exception as exc:
@@ -278,14 +324,18 @@ def index() -> FileResponse:
 @app.post("/api/jobs")
 async def create_job(
     image: UploadFile = File(...),
-    polygons: str = Form(...),
+    mask: Optional[UploadFile] = File(None),
+    polygons: str = Form("[]"),
+    experiment_name: str = Form(...),
     prompt: str = Form(""),
     steps: int = Form(30),
     guidance: float = Form(5.0),
     size: int = Form(512),
     seed: int = Form(1234),
+    use_partial_unet: bool = Form(True),
     train_before_repair: bool = Form(False),
 ) -> dict[str, Any]:
+    display_name, job_id = experiment_id_from_name(experiment_name)
     parsed_polygons = parse_polygons(polygons)
     image_bytes = await image.read()
     try:
@@ -293,17 +343,24 @@ async def create_job(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image") from exc
 
-    job_id = uuid.uuid4().hex[:12]
     job_dir = UI_OUTPUT_ROOT / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
+    drawn_mask = mask_from_polygons(pil_image.size, parsed_polygons)
+    uploaded_mask = None
+    if mask is not None:
+        mask_bytes = await mask.read()
+        if mask_bytes:
+            uploaded_mask = prepare_uploaded_mask(mask_bytes, pil_image.size)
 
-    input_path = job_dir / "input.png"
-    mask_path = job_dir / "mask.png"
-    pil_image.save(input_path)
-    mask = mask_from_polygons(pil_image.size, parsed_polygons)
-    if mask.getbbox() is None:
-        raise HTTPException(status_code=400, detail="Mask is empty")
-    mask.save(mask_path)
+    final_mask = ImageChops.lighter(drawn_mask, uploaded_mask) if uploaded_mask is not None else drawn_mask
+    if final_mask.getbbox() is None:
+        raise HTTPException(status_code=400, detail="请绘制修复区域或导入非空掩码")
+
+    if uploaded_mask is not None and parsed_polygons:
+        mask_source = "combined"
+    elif uploaded_mask is not None:
+        mask_source = "uploaded"
+    else:
+        mask_source = "drawn"
 
     params = {
         "prompt": prompt.strip(),
@@ -311,15 +368,44 @@ async def create_job(
         "guidance": clamp_float(guidance, 1.0, 20.0),
         "size": clamp_int(size, 128, 2048),
         "seed": clamp_int(seed, 0, 2_147_483_647),
+        "use_partial_unet": bool(use_partial_unet),
         "train_before_repair": bool(train_before_repair),
     }
-    (job_dir / "request.json").write_text(
-        json.dumps({"params": params, "polygons": parsed_polygons}, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
     with jobs_lock:
-        jobs[job_id] = new_job_state(job_id)
+        matching_job_id = next((known_id for known_id in jobs if known_id.casefold() == job_id.casefold()), None)
+        existing_job = jobs.get(matching_job_id) if matching_job_id else None
+        if existing_job and existing_job["status"] in {"queued", "running"}:
+            raise HTTPException(status_code=409, detail="同名实验正在运行，请等待完成后再覆盖")
+        if matching_job_id and matching_job_id != job_id:
+            jobs.pop(matching_job_id)
+
+        resolved_root = UI_OUTPUT_ROOT.resolve()
+        resolved_job_dir = job_dir.resolve()
+        if resolved_job_dir.parent != resolved_root:
+            raise HTTPException(status_code=400, detail="实验名称生成的目录无效")
+        if job_dir.exists():
+            shutil.rmtree(job_dir)
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        pil_image.save(job_dir / "input.png")
+        final_mask.save(job_dir / "mask.png")
+        (job_dir / "request.json").write_text(
+            json.dumps(
+                {
+                    "experiment_name": display_name,
+                    "params": params,
+                    "mask_source": mask_source,
+                    "uploaded_mask_name": mask.filename if uploaded_mask is not None else None,
+                    "polygons": parsed_polygons,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        jobs[job_id] = new_job_state(job_id, display_name)
+        log_job(job_id, f"产物目录：{job_dir}")
     executor.submit(run_job, job_id, params)
     return get_job(job_id)
 

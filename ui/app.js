@@ -1,6 +1,8 @@
 const state = {
   file: null,
   image: null,
+  maskFile: null,
+  maskOverlay: null,
   points: [],
   polygons: [],
   hover: null,
@@ -10,6 +12,8 @@ const state = {
 
 const els = {
   imageInput: document.getElementById("imageInput"),
+  maskInput: document.getElementById("maskInput"),
+  experimentFolderInput: document.getElementById("experimentFolderInput"),
   canvas: document.getElementById("maskCanvas"),
   emptyState: document.getElementById("emptyState"),
   undoPoint: document.getElementById("undoPoint"),
@@ -18,15 +22,18 @@ const els = {
   pointCounter: document.getElementById("pointCounter"),
   startRepair: document.getElementById("startRepair"),
   runState: document.getElementById("runState"),
+  experimentName: document.getElementById("experimentName"),
   prompt: document.getElementById("prompt"),
   steps: document.getElementById("steps"),
   guidance: document.getElementById("guidance"),
   size: document.getElementById("size"),
   seed: document.getElementById("seed"),
+  usePartialUnet: document.getElementById("usePartialUnet"),
   trainBeforeRepair: document.getElementById("trainBeforeRepair"),
   logBox: document.getElementById("logBox"),
   resultFrame: document.getElementById("resultFrame"),
   resultImage: document.getElementById("resultImage"),
+  openRepairArea: document.getElementById("openRepairArea"),
   openResult: document.getElementById("openResult"),
   progressLabel: document.getElementById("progressLabel"),
   progressValue: document.getElementById("progressValue"),
@@ -63,13 +70,16 @@ function updateButtons() {
   const hasImage = Boolean(state.image);
   const hasCurrent = state.points.length > 0;
   const hasClosed = state.polygons.length > 0;
+  const hasMask = hasClosed || Boolean(state.maskFile);
+  const hasExperimentName = Boolean(els.experimentName.value.trim());
   els.undoPoint.disabled = !hasCurrent;
   els.finishPolygon.disabled = state.points.length < 3;
-  els.clearMask.disabled = !hasCurrent && !hasClosed;
-  els.startRepair.disabled = !hasImage || !hasClosed || els.startRepair.dataset.busy === "true";
+  els.clearMask.disabled = !hasCurrent && !hasMask;
+  els.startRepair.disabled = !hasImage || !hasMask || !hasExperimentName || els.startRepair.dataset.busy === "true";
   const pointTotal = state.polygons.reduce((sum, poly) => sum + poly.length, 0) + state.points.length;
   const regionText = state.polygons.length ? `，${state.polygons.length} 个区域` : "";
-  els.pointCounter.textContent = `${pointTotal} 个点${regionText}`;
+  const importText = state.maskFile ? "，已导入掩码" : "";
+  els.pointCounter.textContent = `${pointTotal} 个点${regionText}${importText}`;
 }
 
 function canvasPoint(event) {
@@ -120,6 +130,10 @@ function redraw() {
   if (!state.image) return;
   ctx.drawImage(state.image, 0, 0, els.canvas.width, els.canvas.height);
 
+  if (state.maskOverlay) {
+    ctx.drawImage(state.maskOverlay, 0, 0);
+  }
+
   for (const polygon of state.polygons) {
     drawPolygon(polygon, "rgba(255, 255, 255, 0.48)", "#b45309", true);
     polygon.forEach(drawPoint);
@@ -135,21 +149,40 @@ function redraw() {
 function resetResult() {
   els.resultImage.hidden = true;
   els.resultImage.removeAttribute("src");
+  els.openRepairArea.hidden = true;
+  els.openRepairArea.href = "#";
   els.openResult.hidden = true;
   els.openResult.href = "#";
   els.resultFrame.querySelector("span").hidden = false;
 }
 
-function loadImage(file) {
-  const url = URL.createObjectURL(file);
-  const image = new Image();
-  image.onload = () => {
-    URL.revokeObjectURL(url);
+function imageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`无法读取图片：${file.name}`));
+    };
+    image.src = url;
+  });
+}
+
+async function loadImage(file) {
+  try {
+    const image = await imageFromFile(file);
     state.file = file;
     state.image = image;
+    state.maskFile = null;
+    state.maskOverlay = null;
     state.points = [];
     state.polygons = [];
     state.hover = null;
+    els.maskInput.value = "";
     els.canvas.width = image.naturalWidth;
     els.canvas.height = image.naturalHeight;
     els.canvas.style.display = "block";
@@ -160,8 +193,111 @@ function loadImage(file) {
     setRunState("就绪");
     redraw();
     updateButtons();
-  };
-  image.src = url;
+    return true;
+  } catch (error) {
+    els.imageInput.value = "";
+    els.logBox.textContent = error.message;
+    return false;
+  }
+}
+
+function buildMaskOverlay(maskImage) {
+  const overlay = document.createElement("canvas");
+  overlay.width = els.canvas.width;
+  overlay.height = els.canvas.height;
+  const overlayCtx = overlay.getContext("2d", { willReadFrequently: true });
+  overlayCtx.drawImage(maskImage, 0, 0, overlay.width, overlay.height);
+  const pixels = overlayCtx.getImageData(0, 0, overlay.width, overlay.height);
+  for (let index = 0; index < pixels.data.length; index += 4) {
+    const isRepair = Math.max(pixels.data[index], pixels.data[index + 1], pixels.data[index + 2]) >= 128;
+    pixels.data[index] = 255;
+    pixels.data[index + 1] = 255;
+    pixels.data[index + 2] = 255;
+    pixels.data[index + 3] = isRepair ? 165 : 0;
+  }
+  overlayCtx.putImageData(pixels, 0, 0);
+  return overlay;
+}
+
+async function loadMask(file) {
+  if (!state.image) {
+    els.maskInput.value = "";
+    els.logBox.textContent = "请先上传原图，再导入掩码。";
+    return false;
+  }
+
+  try {
+    const maskImage = await imageFromFile(file);
+    state.maskFile = file;
+    state.maskOverlay = buildMaskOverlay(maskImage);
+    resetResult();
+    els.logBox.textContent = `已导入掩码：${file.name}\n白色为修复区，黑色为保留区。`;
+    redraw();
+    updateButtons();
+    return true;
+  } catch (error) {
+    els.maskInput.value = "";
+    els.logBox.textContent = error.message;
+    return false;
+  }
+}
+
+function restoreField(element, value) {
+  if (value !== undefined && value !== null) {
+    element.value = String(value);
+  }
+}
+
+async function importExperiment(fileList) {
+  const files = Array.from(fileList);
+  const findFile = (name) => files.find((file) => file.name.toLowerCase() === name);
+  const imageFile = findFile("input.png");
+  const maskFile = findFile("mask.png");
+  const requestFile = findFile("request.json");
+
+  if (!imageFile || !maskFile || !requestFile) {
+    els.logBox.textContent = "所选文件夹不是完整实验目录，需要包含 input.png、mask.png 和 request.json。";
+    els.experimentFolderInput.value = "";
+    return;
+  }
+
+  let request;
+  try {
+    request = JSON.parse(await requestFile.text());
+  } catch (error) {
+    els.logBox.textContent = "request.json 无法读取，请确认历史实验文件完整。";
+    els.experimentFolderInput.value = "";
+    return;
+  }
+
+  if (!(await loadImage(imageFile)) || !(await loadMask(maskFile))) {
+    els.experimentFolderInput.value = "";
+    return;
+  }
+
+  const params = request.params || {};
+  const relativePath = requestFile.webkitRelativePath || "";
+  const folderName = relativePath.split("/")[0] || "历史实验";
+  els.experimentName.value = request.experiment_name || folderName;
+  restoreField(els.prompt, params.prompt);
+  restoreField(els.steps, params.steps);
+  restoreField(els.guidance, params.guidance);
+  restoreField(els.size, params.size);
+  restoreField(els.seed, params.seed);
+  if (params.use_partial_unet !== undefined) {
+    els.usePartialUnet.checked = Boolean(params.use_partial_unet);
+  }
+  if (params.train_before_repair !== undefined) {
+    els.trainBeforeRepair.checked = Boolean(params.train_before_repair);
+  }
+
+  updateButtons();
+  els.logBox.textContent = [
+    `已恢复历史实验：${els.experimentName.value}`,
+    "已载入原图、最终掩码和上次运行参数。",
+    "再次开始修复会覆盖该实验的旧产物。",
+  ].join("\n");
+  els.experimentFolderInput.value = "";
 }
 
 function finishPolygon() {
@@ -177,12 +313,16 @@ function clearMask() {
   state.points = [];
   state.polygons = [];
   state.hover = null;
+  state.maskFile = null;
+  state.maskOverlay = null;
+  els.maskInput.value = "";
   redraw();
   updateButtons();
 }
 
 async function createJob() {
-  if (!state.file || !state.polygons.length) return;
+  const experimentName = els.experimentName.value.trim();
+  if (!state.file || (!state.polygons.length && !state.maskFile) || !experimentName) return;
   els.startRepair.dataset.busy = "true";
   updateButtons();
   resetResult();
@@ -192,12 +332,15 @@ async function createJob() {
 
   const formData = new FormData();
   formData.append("image", state.file);
+  if (state.maskFile) formData.append("mask", state.maskFile);
   formData.append("polygons", JSON.stringify(state.polygons));
+  formData.append("experiment_name", experimentName);
   formData.append("prompt", els.prompt.value);
   formData.append("steps", String(clampNumber(els.steps.value, 1, 100, 30)));
   formData.append("guidance", String(clampNumber(els.guidance.value, 1, 20, 5)));
   formData.append("size", String(clampNumber(els.size.value, 128, 2048, 512)));
   formData.append("seed", String(clampNumber(els.seed.value, 0, 2147483647, 1234)));
+  formData.append("use_partial_unet", els.usePartialUnet.checked ? "true" : "false");
   formData.append("train_before_repair", els.trainBeforeRepair.checked ? "true" : "false");
 
   try {
@@ -230,6 +373,8 @@ function renderJob(job) {
     els.resultImage.src = imageUrl;
     els.resultImage.hidden = false;
     els.resultFrame.querySelector("span").hidden = true;
+    els.openRepairArea.href = job.repair_area_url;
+    els.openRepairArea.hidden = !job.repair_area_url;
     els.openResult.href = job.collage_url || job.result_url;
     els.openResult.hidden = false;
     stopPolling();
@@ -278,6 +423,15 @@ els.imageInput.addEventListener("change", (event) => {
   if (file) loadImage(file);
 });
 
+els.maskInput.addEventListener("change", (event) => {
+  const [file] = event.target.files;
+  if (file) loadMask(file);
+});
+
+els.experimentFolderInput.addEventListener("change", (event) => {
+  if (event.target.files.length) importExperiment(event.target.files);
+});
+
 els.canvas.addEventListener("click", (event) => {
   if (!state.image || els.startRepair.dataset.busy === "true") return;
   state.points.push(canvasPoint(event));
@@ -306,6 +460,7 @@ els.undoPoint.addEventListener("click", () => {
 els.finishPolygon.addEventListener("click", finishPolygon);
 els.clearMask.addEventListener("click", clearMask);
 els.startRepair.addEventListener("click", createJob);
+els.experimentName.addEventListener("input", updateButtons);
 
 window.addEventListener("load", refreshIcons);
 refreshIcons();

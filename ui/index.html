@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>壁画数字化修复</title>
-    <link rel="stylesheet" href="/ui/styles.css" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260817-history-import" />
     <script defer src="https://unpkg.com/lucide@latest"></script>
-    <script defer src="/ui/app.js"></script>
+    <script defer src="/ui/app.js?v=20260817-history-import"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -30,7 +30,17 @@
               <i data-lucide="upload"></i>
               <span>上传图片</span>
             </label>
-            <input id="imageInput" type="file" accept="image/*" />
+            <input id="imageInput" type="file" accept="image/*" hidden />
+            <label class="tool-button" for="maskInput" title="白色为修复区，黑色为保留区">
+              <i data-lucide="scan"></i>
+              <span>导入掩码</span>
+            </label>
+            <input id="maskInput" type="file" accept="image/*" hidden />
+            <label class="tool-button" for="experimentFolderInput" title="恢复原图、最终掩码和上次参数">
+              <i data-lucide="folder-input"></i>
+              <span>导入历史实验</span>
+            </label>
+            <input id="experimentFolderInput" type="file" webkitdirectory directory multiple hidden />
             <button class="tool-button" id="undoPoint" type="button" disabled>
               <i data-lucide="undo-2"></i>
               <span>撤销点</span>
@@ -49,7 +59,7 @@
             <canvas id="maskCanvas"></canvas>
             <div class="empty-state" id="emptyState">
               <strong>上传图片</strong>
-              <span>点选边界后闭合修复区域</span>
+              <span>随后绘制修复区域或导入黑白掩码</span>
             </div>
           </div>
         </section>
@@ -57,6 +67,11 @@
         <aside class="control-panel">
           <section class="panel-section">
             <h2>修复参数设置</h2>
+            <label class="field">
+              <span>实验名称</span>
+              <input id="experimentName" type="text" maxlength="80" placeholder="例如：敦煌壁画-基础模型-01" autocomplete="off" />
+              <small>同名实验会覆盖上一次产物</small>
+            </label>
             <label class="field">
               <span>修复引导提示词</span>
               <textarea id="prompt" rows="3" placeholder="保持壁画色彩与纹理自然过渡"></textarea>
@@ -82,6 +97,12 @@
             </div>
 
             <label class="switch-row">
+              <input id="usePartialUnet" type="checkbox" checked />
+              <span class="switch"></span>
+              <span>使用部分微调 UNet</span>
+            </label>
+
+            <label class="switch-row">
               <input id="trainBeforeRepair" type="checkbox" />
               <span class="switch"></span>
               <span>使用当前数据集快速训练</span>
@@ -105,7 +126,10 @@
           <section class="panel-section output-section">
             <div class="section-head">
               <h2>修复图</h2>
-              <a id="openResult" class="ghost-link" href="#" target="_blank" rel="noreferrer" hidden>打开修复图</a>
+              <div class="result-links">
+                <a id="openRepairArea" class="ghost-link" href="#" target="_blank" rel="noreferrer" hidden>打开拟修复区域</a>
+                <a id="openResult" class="ghost-link" href="#" target="_blank" rel="noreferrer" hidden>打开结果对比图</a>
+              </div>
             </div>
             <div class="result-frame" id="resultFrame">
               <span>暂无结果</span>

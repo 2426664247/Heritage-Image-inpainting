@@ -30,6 +30,7 @@ ProgressFn = Optional[Callable[[int, int], None]]
 class InpaintResult:
     result_path: Path
     collage_path: Path
+    repair_area_path: Path
     seeds: list[int]
 
 
@@ -236,6 +237,8 @@ class InpaintRunner:
 
         result_path = output_dir / "result.png"
         collage_path = output_dir / "collage.png"
+        repair_area_path = output_dir / "repair_area.png"
+        overlay.save(repair_area_path)
         row_images = []
         seeds = []
         base_seed = seed or 0
@@ -281,4 +284,9 @@ class InpaintRunner:
         if collage is not None:
             collage.save(collage_path)
         _log(logger, "Saved result and comparison image.")
-        return InpaintResult(result_path=result_path, collage_path=collage_path, seeds=seeds)
+        return InpaintResult(
+            result_path=result_path,
+            collage_path=collage_path,
+            repair_area_path=repair_area_path,
+            seeds=seeds,
+        )

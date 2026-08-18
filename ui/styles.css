@@ -143,7 +143,9 @@ button {
   min-height: 44px;
 }
 
-#imageInput {
+#imageInput,
+#maskInput,
+#experimentFolderInput {
   display: none;
 }
 
@@ -302,6 +304,15 @@ button {
   color: #617482;
 }
 
+.field input::placeholder {
+  color: #617482;
+}
+
+.field small {
+  color: #82929d;
+  font-size: 12px;
+}
+
 .field textarea {
   resize: vertical;
   min-height: 84px;
@@ -418,6 +429,13 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.result-links {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .ghost-link {
